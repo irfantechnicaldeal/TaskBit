@@ -1,0 +1,87 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+require('dotenv').config();
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+// Environment variables
+const PORT = process.env.PORT || 5000;
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/taskbit';
+
+// MongoDB Connection
+mongoose.connect(MONGO_URI)
+    .then(() => console.log('MongoDB Connected Successfully to TaskBit Database!'))
+    .catch(err => console.error('MongoDB Connection Error:', err));
+
+// --- Mongoose Schema & Model ---
+const TaskSchema = new mongoose.Schema({
+    title: { type: String, required: true },
+    description: { type: String, default: '' },
+    completed: { type: Boolean, default: false },
+    youtubeUrl: { type: String, default: '' },
+    userId: { type: String, default: '' }
+}, { timestamps: true });
+
+const Task = mongoose.model('Task', TaskSchema);
+
+// --- API Routes ---
+
+// Health Check
+app.get('/', (req, res) => {
+    res.json({ message: 'TaskBit MERN Backend Server is running successfully!' });
+});
+
+// 1. Get all tasks
+app.get('/api/tasks', async (req, res) => {
+    try {
+        const tasks = await Task.find().sort({ createdAt: -1 });
+        res.json(tasks);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 2. Create a new task
+app.post('/api/tasks', async (req, res) => {
+    try {
+        const newTask = new Task(req.body);
+        const savedTask = await newTask.save();
+        res.status(201).json(savedTask);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// 3. Update task (e.g. completion status)
+app.put('/api/tasks/:id', async (req, res) => {
+    try {
+        const updatedTask = await Task.findByIdAndUpdate(
+            req.params.id,
+            req.body,
+            { new: true }
+        );
+        if (!updatedTask) return res.status(404).json({ error: 'Task not found' });
+        res.json(updatedTask);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// 4. Delete task
+app.delete('/api/tasks/:id', async (req, res) => {
+    try {
+        const deletedTask = await Task.findByIdAndDelete(req.params.id);
+        if (!deletedTask) return res.status(404).json({ error: 'Task not found' });
+        res.json({ message: 'Task deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Start Server
+app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
+});
