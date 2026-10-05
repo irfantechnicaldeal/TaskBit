@@ -21,4 +21,9 @@ object UserSession {
         val authPrefs = context.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE)
         return authPrefs.getString("logged_in_mobile", "") ?: ""
     }
+
+    fun getLoggedInUserId(context: Context): String? {
+        val authPrefs = context.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE)
+        return authPrefs.getString("user_id", null)
+    }
 }

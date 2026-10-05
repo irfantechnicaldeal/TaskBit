@@ -1,9 +1,29 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
+const { requireAdmin } = require('../middleware/requireAdmin');
+const { requireUser } = require('../middleware/requireUser');
+
+// GET /api/users/me - Return safe profile fields for the authenticated user.
+router.get('/me', requireUser, (req, res) => {
+    const user = req.user;
+    res.json({
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        points: user.points,
+        taskRewardUnits: user.taskRewardUnits || 0,
+        currentTaskCycle: user.currentTaskCycle || 1,
+        balance: user.balance,
+        totalEarned: user.totalEarned,
+        totalWithdrawn: user.totalWithdrawn,
+        createdAt: user.createdAt
+    });
+});
 
 // POST /api/users - Create user
-router.post('/', async (req, res) => {
+router.post('/', requireAdmin, async (req, res) => {
     try {
         const newUser = new User(req.body);
         const savedUser = await newUser.save();
@@ -14,7 +34,7 @@ router.post('/', async (req, res) => {
 });
 
 // GET /api/users - Get all users (useful for Admin panel)
-router.get('/', async (req, res) => {
+router.get('/', requireAdmin, async (req, res) => {
     try {
         const users = await User.find().sort({ createdAt: -1 });
         res.json(users);
@@ -35,7 +55,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // PUT /api/users/:id - Update user details
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireAdmin, async (req, res) => {
     try {
         const updatedUser = await User.findByIdAndUpdate(req.params.id, req.body, { new: true });
         if (!updatedUser) return res.status(404).json({ error: 'User not found' });
@@ -46,7 +66,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // PUT /api/users/:id/points - Points API (update points, balance, totalEarned)
-router.put('/:id/points', async (req, res) => {
+router.put('/:id/points', requireAdmin, async (req, res) => {
     try {
         const { points, balance, totalEarned, totalWithdrawn } = req.body;
         const updateData = {};

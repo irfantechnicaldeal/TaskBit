@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const BankDetails = require('../models/BankDetails');
+const { requireAdmin } = require('../middleware/requireAdmin');
 
 // POST /api/bank-details - Create or Add bank details
 router.post('/', async (req, res) => {
@@ -37,7 +38,7 @@ router.get('/:userId', async (req, res) => {
 });
 
 // PUT /api/bank-details/:userId - Update bank details by userId
-router.put('/:userId', async (req, res) => {
+router.put('/:userId', requireAdmin, async (req, res) => {
     try {
         const updatedBank = await BankDetails.findOneAndUpdate(
             { userId: req.params.userId },

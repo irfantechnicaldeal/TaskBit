@@ -1,10 +1,14 @@
 package com.example.taskbit
 
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
+import android.view.View
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
@@ -13,89 +17,62 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.example.taskbit.api.RetrofitClient
+import com.example.taskbit.api.TaskModel
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 class TaskDetailActivity : AppCompatActivity() {
 
-    private lateinit var recyclerView: RecyclerView
+    companion object {
+        private const val TAG = "TaskVideoLaunch"
+        const val EXTRA_TASK_COMPLETED = "TASK_COMPLETED"
+        const val EXTRA_TASK_ALREADY_COMPLETED = "TASK_ALREADY_COMPLETED"
+        const val EXTRA_TASK_COMPLETION_FAILED = "TASK_COMPLETION_FAILED"
+        const val EXTRA_COMPLETION_ERROR = "TASK_COMPLETION_ERROR"
+        const val EXTRA_REWARD_COINS = "TASK_REWARD_COINS"
+        const val EXTRA_UPDATED_POINTS = "TASK_UPDATED_POINTS"
+        const val EXTRA_CYCLE_COMPLETED = "TASK_CYCLE_COMPLETED"
+    }
 
-    private val youtubeLinks = listOf(
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ", // Task 1
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 2
-        "https://www.youtube.com/watch?v=jNQXAC9IVRw", // Task 3
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 4
-        "https://www.youtube.com/watch?v=9bZkp7q19f0", // Task 5
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 6
-        "https://www.youtube.com/watch?v=kJQP7kiw5Fk", // Task 7
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 8
-        "https://www.youtube.com/watch?v=3JZ_D3ELwOQ", // Task 9
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 10
-        "https://www.youtube.com/watch?v=5NV6Rdv1a3I", // Task 11
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 12
-        "https://www.youtube.com/watch?v=JGwWNGJdvx8", // Task 13
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 14
-        "https://www.youtube.com/watch?v=fJ9rUzIMcZQ", // Task 15
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 16
-        "https://www.youtube.com/watch?v=RgKAFK5djSk", // Task 17
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 18
-        "https://www.youtube.com/watch?v=OPf0YbXqDm0", // Task 19
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 20
-        "https://www.youtube.com/watch?v=CevxZBuZZk4", // Task 21
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 22
-        "https://www.youtube.com/watch?v=hT_nvWreIhg", // Task 23
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 24
-        "https://www.youtube.com/watch?v=YQHsXMglC9A", // Task 25
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 26
-        "https://www.youtube.com/watch?v=2Vv-BfVoq4g", // Task 27
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 28
-        "https://www.youtube.com/watch?v=RB-RcX5DS5A", // Task 29
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 30
-        "https://www.youtube.com/watch?v=2X_iUBkgw7A", // Task 31
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 32
-        "https://www.youtube.com/watch?v=kXYiU_JCYtU", // Task 33
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 34
-        "https://www.youtube.com/watch?v=uelHwf8o7_U", // Task 35
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 36
-        "https://www.youtube.com/watch?v=09R8_2nJtjg", // Task 37
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 38
-        "https://www.youtube.com/watch?v=60ItHLz5WEA", // Task 39
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 40
-        "https://www.youtube.com/watch?v=2KnYA6ZuVuU", // Task 41
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 42
-        "https://www.youtube.com/watch?v=YqeW9_5kURI", // Task 43
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 44
-        "https://www.youtube.com/watch?v=0J2QdDbelmY", // Task 45
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 46
-        "https://www.youtube.com/watch?v=XQZ1JvYJq5Y", // Task 47
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe", // Task 48
-        "https://www.youtube.com/watch?v=5qap5aO4i9A", // Task 49
-        "https://youtu.be/LJqPssrMGu0?si=VFAQtmz_3VfFh8Qe"  // Task 50
-    )
+    private lateinit var recyclerView: RecyclerView
+    private lateinit var emptyStateTextView: TextView
+    private var tasksCall: Call<List<TaskModel>>? = null
+    private var taskLoadGeneration = 0
 
     override fun onResume() {
         super.onResume()
-        if (YouTubeOverlayService.isServiceRunning) {
-            Toast.makeText(
-                this,
-                "Task failed! You left YouTube before 30 seconds.",
-                Toast.LENGTH_LONG
-            ).show()
 
-            val serviceIntent =
-                Intent(
-                    this,
-                    YouTubeOverlayService::class.java
-                )
-            stopService(serviceIntent)
+        if (YouTubeOverlayService.isServiceRunning) {
+            Toast.makeText(this, "Task failed! You left YouTube before 30 seconds.", Toast.LENGTH_LONG).show()
+            stopService(Intent(this, YouTubeOverlayService::class.java))
             YouTubeOverlayService.isServiceRunning = false
         }
 
-        if (intent.getBooleanExtra("TASK_COMPLETED", false)) {
-            intent.removeExtra("TASK_COMPLETED")
-            val allCompleted = intent.getBooleanExtra("ALL_COMPLETED", false)
-            if (allCompleted) {
-                Toast.makeText(this, "🎉 Amazing! All 50 tasks completed! +50 Bonus Coins! Restarting cycle.", Toast.LENGTH_LONG).show()
-            } else {
-                Toast.makeText(this, "🎉 Task Completed! +5 Coins Added!", Toast.LENGTH_LONG).show()
+        when {
+            intent.getBooleanExtra(EXTRA_TASK_COMPLETED, false) -> {
+                val reward = intent.getDoubleExtra(EXTRA_REWARD_COINS, 0.5)
+                val points = intent.getDoubleExtra(EXTRA_UPDATED_POINTS, 0.0)
+                val cycleCompleted = intent.getBooleanExtra(EXTRA_CYCLE_COMPLETED, false)
+                val message = if (cycleCompleted) {
+                    "Cycle complete! +${CoinFormatter.format(reward)} coin. Coin total: ${CoinFormatter.format(points)}."
+                } else {
+                    "Task completed! +${CoinFormatter.format(reward)} coin. Coin total: ${CoinFormatter.format(points)}."
+                }
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                intent.removeExtra(EXTRA_TASK_COMPLETED)
+            }
+            intent.getBooleanExtra(EXTRA_TASK_ALREADY_COMPLETED, false) -> {
+                Toast.makeText(this, "This task was already completed in this cycle; no coins were added.", Toast.LENGTH_LONG).show()
+                intent.removeExtra(EXTRA_TASK_ALREADY_COMPLETED)
+            }
+            intent.getBooleanExtra(EXTRA_TASK_COMPLETION_FAILED, false) -> {
+                val message = intent.getStringExtra(EXTRA_COMPLETION_ERROR)
+                    ?: "Task completion could not be confirmed. No coins were added."
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                intent.removeExtra(EXTRA_TASK_COMPLETION_FAILED)
+                intent.removeExtra(EXTRA_COMPLETION_ERROR)
             }
         }
 
@@ -115,76 +92,125 @@ class TaskDetailActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                val intent = Intent(this@TaskDetailActivity, MainActivity::class.java).apply {
+                if (YouTubeOverlayService.isServiceRunning) {
+                    Toast.makeText(this@TaskDetailActivity, "Please wait for the countdown to complete before going back!", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                val backIntent = Intent(this@TaskDetailActivity, MainActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 }
-                startActivity(intent)
+                startActivity(backIntent)
                 finish()
             }
         })
 
         recyclerView = findViewById(R.id.tasksRecyclerView)
         recyclerView.layoutManager = LinearLayoutManager(this)
-        loadTasksList()
+        emptyStateTextView = findViewById(R.id.tasksEmptyTextView)
     }
 
     private fun loadTasksList() {
-        val prefs = UserSession.getUserPrefs(this)
-        val completedSet = prefs.getStringSet("completed_tasks", emptySet()) ?: emptySet()
+        val requestGeneration = ++taskLoadGeneration
+        tasksCall?.cancel()
+        tasksCall = null
+        recyclerView.adapter = TaskAdapter(emptyList()) {}
 
-        var uncompletedTasks = (1..50).filter { it.toString() !in completedSet }
-
-        // If all 50 tasks are completed, restart the cycle from 1 to 50!
-        if (uncompletedTasks.isEmpty()) {
-            prefs.edit().remove("completed_tasks").apply()
-            uncompletedTasks = (1..50).toList()
-            Toast.makeText(this, "All 50 tasks completed! Restarting cycle from 1 to 50.", Toast.LENGTH_LONG).show()
-        }
-
-        recyclerView.adapter = TaskAdapter(uncompletedTasks) { taskNum ->
-            if (!Settings.canDrawOverlays(this)) {
-                val intent = Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
-                )
-                startActivity(intent)
-                Toast.makeText(
-                    this,
-                    "Overlay permission allow karo",
-                    Toast.LENGTH_LONG
-                ).show()
-                return@TaskAdapter
+        showEmptyState("Loading tasks…")
+        val call = RetrofitClient.apiService.getTasks()
+        tasksCall = call
+        call.enqueue(object : Callback<List<TaskModel>> {
+            override fun onResponse(call: Call<List<TaskModel>>, response: Response<List<TaskModel>>) {
+                if (call.isCanceled || requestGeneration != taskLoadGeneration) return
+                if (response.isSuccessful && response.body() != null) {
+                    val tasks = TaskCatalog.orderedBackendTasks(response.body().orEmpty())
+                    val taskOne = tasks.firstOrNull { it.taskNumber == 1 }
+                    Log.i(TAG, "Fresh backend GET /api/tasks applied ${tasks.size} usable tasks; Task #1 id=${taskOne?.id}, youtubeUrl=${taskOne?.youtubeUrl}")
+                    recyclerView.adapter = TaskAdapter(tasks) { task -> startTask(task) }
+                    if (tasks.isEmpty()) showEmptyState("No active tasks are available right now.")
+                    else hideEmptyState()
+                } else {
+                    Log.e(TAG, "GET /api/tasks failed with HTTP ${response.code()}")
+                    recyclerView.adapter = TaskAdapter(emptyList()) {}
+                    showEmptyState("Could not load tasks. Please try again.")
+                    Toast.makeText(this@TaskDetailActivity, "Could not load tasks. Please try again.", Toast.LENGTH_LONG).show()
+                }
             }
 
-            prefs.edit().putInt("current_task_number", taskNum).apply()
-
-            startCountdownOverlay()
-            openYouTube(taskNum)
-        }
+            override fun onFailure(call: Call<List<TaskModel>>, t: Throwable) {
+                if (call.isCanceled || requestGeneration != taskLoadGeneration) return
+                Log.e(TAG, "GET /api/tasks failed", t)
+                recyclerView.adapter = TaskAdapter(emptyList()) {}
+                showEmptyState("Unable to connect. Please try again.")
+                Toast.makeText(this@TaskDetailActivity, "Unable to connect to load tasks", Toast.LENGTH_LONG).show()
+            }
+        })
     }
 
-    private fun startCountdownOverlay() {
-        val serviceIntent = Intent(this, YouTubeOverlayService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
+    private fun startTask(task: TaskModel) {
+        val taskId = task.id
+        val videoUrl = TaskVideoUrl.normalize(task.youtubeUrl)
+        if (taskId.isNullOrBlank() || videoUrl.isNullOrBlank()) {
+            Log.e(TAG, "Cannot launch task: taskId/url missing or URL is not a supported YouTube URL; taskNumber=${task.taskNumber}, taskId=$taskId")
+            Toast.makeText(this, "This task has no valid video configured", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (task.completed) {
+            Toast.makeText(this, "This task is already complete for the current cycle", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Please enable 'Display over other apps' permission for TaskBit to show the reward timer", Toast.LENGTH_LONG).show()
+            val permissionIntent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(permissionIntent)
+            return
         } else {
-            startService(serviceIntent)
+            val serviceIntent = Intent(this, YouTubeOverlayService::class.java).apply {
+                putExtra(YouTubeOverlayService.EXTRA_TASK_ID, taskId)
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
+                Log.i(TAG, "Countdown service start requested for taskId=$taskId")
+            } catch (error: Exception) {
+                // The task URL must still open even if the optional countdown overlay cannot start.
+                Log.e(TAG, "Countdown service could not start; continuing to YouTube", error)
+            }
         }
+        Log.i(TAG, "Task tap uses backend task response; taskNumber=${task.taskNumber}, taskId=$taskId, finalUrl=$videoUrl")
+        openYouTube(videoUrl)
     }
 
-    private fun openYouTube(taskNumber: Int) {
-        val index = (taskNumber - 1).coerceIn(0, youtubeLinks.size - 1)
-        val youtubeUrl = youtubeLinks[index]
-
+    private fun openYouTube(videoUrl: String) {
+        val trimmedUrl = videoUrl.trim()
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(trimmedUrl))
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(youtubeUrl))
+            Log.i(TAG, "Dispatching ACTION_VIEW with current task URL: $trimmedUrl")
             startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(
-                this,
-                "YouTube open nahi ho pa raha",
-                Toast.LENGTH_LONG
-            ).show()
+            Log.i(TAG, "ACTION_VIEW dispatched successfully for URL: $trimmedUrl")
+        } catch (error: ActivityNotFoundException) {
+            Log.e(TAG, "No browser or YouTube app can handle ACTION_VIEW for URL: $trimmedUrl", error)
+            Toast.makeText(this, "YouTube ya browser app nahi mila", Toast.LENGTH_LONG).show()
+            stopService(Intent(this, YouTubeOverlayService::class.java))
+        } catch (error: Exception) {
+            Log.e(TAG, "ACTION_VIEW failed for URL: $trimmedUrl", error)
+            Toast.makeText(this, "YouTube open nahi ho pa raha: ${error.message}", Toast.LENGTH_LONG).show()
+            stopService(Intent(this, YouTubeOverlayService::class.java))
         }
     }
+
+    private fun showEmptyState(message: String) {
+        emptyStateTextView.text = message
+        emptyStateTextView.visibility = View.VISIBLE
+    }
+
+    private fun hideEmptyState() {
+        emptyStateTextView.visibility = View.GONE
+    }
+
 }

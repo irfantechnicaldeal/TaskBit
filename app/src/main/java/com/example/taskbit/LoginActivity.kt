@@ -68,6 +68,9 @@ class LoginActivity : AppCompatActivity() {
                             .putString("logged_in_mobile", mobile)
                             .putString("auth_token", authResp.token ?: "")
                             .apply()
+                        authResp.user?.id?.let { userId ->
+                            prefs.edit().putString("user_id", userId).apply()
+                        }
 
                         Toast.makeText(this@LoginActivity, "Login successful!", Toast.LENGTH_SHORT).show()
                         finish()

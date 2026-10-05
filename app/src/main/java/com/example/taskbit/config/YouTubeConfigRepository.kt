@@ -1,7 +1,7 @@
 package com.example.taskbit.config
 
 class YouTubeConfigRepository {
-    private var youtubeUrl: String = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    private var youtubeUrl: String = ""
 
     fun getYouTubeUrl(): String = youtubeUrl
 

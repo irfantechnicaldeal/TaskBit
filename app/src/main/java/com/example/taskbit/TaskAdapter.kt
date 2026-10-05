@@ -5,11 +5,12 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import com.example.taskbit.api.TaskModel
 import com.google.android.material.button.MaterialButton
 
 class TaskAdapter(
-    private val taskList: List<Int>,
-    private val onTaskClick: (Int) -> Unit
+    private val taskList: List<TaskModel>,
+    private val onTaskClick: (TaskModel) -> Unit
 ) : RecyclerView.Adapter<TaskAdapter.TaskViewHolder>() {
 
     class TaskViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -24,13 +25,15 @@ class TaskAdapter(
     }
 
     override fun onBindViewHolder(holder: TaskViewHolder, position: Int) {
-        val taskNum = taskList[position]
-        holder.titleTextView.text = "Task #$taskNum. Watch Task - Start"
+        val task = taskList[position]
+        holder.titleTextView.text = task.title
+        holder.startButton.text = if (task.completed) "Completed" else "Start"
+        holder.startButton.isEnabled = !task.completed
         holder.startButton.setOnClickListener {
-            onTaskClick(taskNum)
+            if (!task.completed) onTaskClick(task)
         }
         holder.itemView.setOnClickListener {
-            onTaskClick(taskNum)
+            if (!task.completed) onTaskClick(task)
         }
     }
 

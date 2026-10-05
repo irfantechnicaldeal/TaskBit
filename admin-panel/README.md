@@ -13,9 +13,7 @@ A professional, responsive React + Vite admin dashboard built for managing TaskB
    npm run dev
    ```
 3. Open `http://localhost:3000` in your browser.
-4. **Login Credentials:**
-   - Email: `admin@taskbit.com`
-   - Password: `admin123`
+4. Configure the backend environment and provision an admin account using the backend's `admin:provision` command. There is no public admin registration route.
 
 ## Features:
 - **Dashboard Overview:** Metric cards for Total Users, Total Points, Total Balance, and Pending Withdrawals.

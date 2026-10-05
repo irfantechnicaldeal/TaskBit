@@ -11,7 +11,8 @@ import android.os.Build
 import android.os.CountDownTimer
 import android.os.IBinder
 import android.provider.Settings
-import android.view.KeyEvent
+import android.util.Log
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
@@ -19,6 +20,12 @@ import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import com.example.taskbit.api.RetrofitClient
+import com.example.taskbit.api.TaskCompletionResponse
+import org.json.JSONObject
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 class YouTubeOverlayService : Service() {
 
@@ -27,10 +34,13 @@ class YouTubeOverlayService : Service() {
     private var overlayView: View? = null
     private var timer: CountDownTimer? = null
     private var isCountdownFinished = false
+    private var currentTaskId: String? = null
 
     companion object {
+        private const val TAG = "TaskVideoLaunch"
         private const val CHANNEL_ID = "taskbit_overlay"
         private const val NOTIFICATION_ID = 1001
+        const val EXTRA_TASK_ID = "taskbit_task_id"
         var isServiceRunning = false
     }
 
@@ -47,6 +57,8 @@ class YouTubeOverlayService : Service() {
     ): Int {
 
         startForegroundServiceNotification()
+        currentTaskId = intent?.getStringExtra(EXTRA_TASK_ID)
+        Log.i(TAG, "Countdown service started for taskId=$currentTaskId")
 
         if (!Settings.canDrawOverlays(this)) {
             Toast.makeText(
@@ -99,6 +111,7 @@ class YouTubeOverlayService : Service() {
             }
 
         } catch (e: Exception) {
+            Log.e(TAG, "Could not promote countdown service to foreground", e)
             stopSelf()
         }
     }
@@ -128,9 +141,11 @@ class YouTubeOverlayService : Service() {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 windowType,
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT
-            )
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+            }
 
         try {
 
@@ -143,54 +158,14 @@ class YouTubeOverlayService : Service() {
                     null
                 )
 
-            val container = overlayView as? OverlayContainerView
-            container?.onWindowFocusLostListener = {
-                if (!isCountdownFinished) {
-                    Toast.makeText(
-                        this,
-                        "Task failed! You left the screen.",
-                        Toast.LENGTH_LONG
-                    ).show()
-
-                    val intent =
-                        Intent(
-                            this,
-                            MainActivity::class.java
-                        ).apply {
-                            addFlags(
-                                Intent.FLAG_ACTIVITY_NEW_TASK or
-                                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                        Intent.FLAG_ACTIVITY_SINGLE_TOP
-                            )
-                        }
-                    startActivity(intent)
-
-                    removeOverlay()
-                    stopForeground(
-                        STOP_FOREGROUND_REMOVE
-                    )
-                    stopSelf()
-                }
-            }
-
-            overlayView?.isFocusable = true
-            overlayView?.isFocusableInTouchMode = true
-            overlayView?.requestFocus()
-            overlayView?.setOnKeyListener { _, keyCode, _ ->
-                if (keyCode == KeyEvent.KEYCODE_BACK) {
-                    // Block back button press during countdown so YouTube doesn't go back
-                    true
-                } else {
-                    false
-                }
-            }
-
             windowManager.addView(
                 overlayView,
                 params
             )
+            Log.i(TAG, "Non-focusable countdown card shown; it will not redirect or cover YouTube taskId=$currentTaskId")
 
         } catch (e: Exception) {
+            Log.e(TAG, "Could not show countdown overlay; YouTube playback remains independent", e)
 
             Toast.makeText(
                 this,
@@ -270,56 +245,108 @@ class YouTubeOverlayService : Service() {
                     backToAppButton.visibility = View.VISIBLE
 
                     backToAppButton.setOnClickListener {
-                        isServiceRunning = false
-
-                        val prefs = UserSession.getUserPrefs(this@YouTubeOverlayService)
-                        val currentTask = prefs.getInt("current_task_number", 1)
-
-                        val existingSet = prefs.getStringSet("completed_tasks", emptySet()) ?: emptySet()
-                        val completedSet = HashSet(existingSet)
-                        completedSet.add(currentTask.toString())
-
-                        val currentCoins = prefs.getInt("coins", 0)
-                        var newCoins = currentCoins + 5
-
-                        val allCompleted = completedSet.size >= 50
-                        if (allCompleted) {
-                            completedSet.clear()
-                            newCoins += 50 // bonus
-                        }
-
-                        prefs.edit()
-                            .putStringSet("completed_tasks", completedSet)
-                            .putInt("coins", newCoins)
-                            .apply()
-
-                        val intent =
-                            Intent(
-                                this@YouTubeOverlayService,
-                                TaskDetailActivity::class.java
-                            ).apply {
-                                addFlags(
-                                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                                            Intent.FLAG_ACTIVITY_CLEAR_TASK
-                                )
-                                putExtra("TASK_COMPLETED", true)
-                                putExtra("ALL_COMPLETED", allCompleted)
-                            }
-                        startActivity(intent)
-
-                        removeOverlay()
-
-                        stopForeground(
-                            STOP_FOREGROUND_REMOVE
-                        )
-
-                        stopSelf()
+                        backToAppButton.isEnabled = false
+                        backToAppButton.text = "Submitting completion…"
+                        submitTaskCompletion()
                     }
                 }
 
             }.start()
+    }
+
+    private fun submitTaskCompletion() {
+        val taskId = currentTaskId
+        if (taskId.isNullOrBlank()) {
+            returnToTasks(completionError = "Task could not be identified. No coins were added.")
+            return
+        }
+
+        val isLoggedIn = try {
+            UserSession.isUserLoggedIn(this) && !UserSession.getLoggedInUserId(this).isNullOrBlank()
+        } catch (_: Exception) {
+            false
+        }
+
+        if (!isLoggedIn) {
+            val view = overlayView
+            if (view != null) {
+                val backToAppButton = view.findViewById<Button>(R.id.backToAppButton)
+                backToAppButton.isEnabled = true
+                backToAppButton.text = "Login to Collect 0.5 Coin"
+                backToAppButton.setOnClickListener {
+                    val intent = Intent(this, LoginActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    }
+                    startActivity(intent)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+                view.findViewById<TextView>(R.id.overlayMessageTextView).text = "Watch complete! Log in to claim your 0.5 coin reward."
+            }
+            return
+        }
+
+        RetrofitClient.apiService.completeTask(taskId).enqueue(object : Callback<TaskCompletionResponse> {
+            override fun onResponse(
+                call: Call<TaskCompletionResponse>,
+                response: Response<TaskCompletionResponse>
+            ) {
+                val completion = response.body()
+                if (response.isSuccessful && completion?.success == true) {
+                    returnToTasks(completion = completion)
+                } else if (response.code() == 409 && isAlreadyCompleted(response.errorBody()?.string())) {
+                    returnToTasks(alreadyCompleted = true)
+                } else {
+                    val message = when (response.code()) {
+                        401 -> "Please login or register to collect coins."
+                        404 -> "This task is no longer available."
+                        else -> completion?.message ?: "Task completion could not be confirmed. Please try again."
+                    }
+                    returnToTasks(completionError = message)
+                }
+            }
+
+            override fun onFailure(call: Call<TaskCompletionResponse>, t: Throwable) {
+                returnToTasks(completionError = "Unable to connect to server to collect coins.")
+            }
+        })
+    }
+
+    private fun isAlreadyCompleted(errorBody: String?): Boolean = try {
+        errorBody?.let { JSONObject(it).optBoolean("alreadyCompleted") } ?: false
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun returnToTasks(
+        completion: TaskCompletionResponse? = null,
+        alreadyCompleted: Boolean = false,
+        completionError: String? = null
+    ) {
+        isServiceRunning = false
+        val returnIntent = Intent(this, TaskDetailActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TASK
+            )
+            if (completion != null) {
+                putExtra(TaskDetailActivity.EXTRA_TASK_COMPLETED, true)
+                putExtra(TaskDetailActivity.EXTRA_REWARD_COINS, completion.rewardCoins)
+                putExtra(TaskDetailActivity.EXTRA_UPDATED_POINTS, completion.points)
+                putExtra(TaskDetailActivity.EXTRA_CYCLE_COMPLETED, completion.cycleCompleted)
+            }
+            if (alreadyCompleted) putExtra(TaskDetailActivity.EXTRA_TASK_ALREADY_COMPLETED, true)
+            if (completionError != null) {
+                putExtra(TaskDetailActivity.EXTRA_TASK_COMPLETION_FAILED, true)
+                putExtra(TaskDetailActivity.EXTRA_COMPLETION_ERROR, completionError)
+            }
+        }
+        startActivity(returnIntent)
+        removeOverlay()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun removeOverlay() {

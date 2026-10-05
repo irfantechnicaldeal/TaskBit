@@ -12,7 +12,7 @@
         android:id="@+id/titleTextView"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:text="Tasks (1 - 50)"
+        android:text="Available Tasks"
         android:textSize="24sp"
         android:textStyle="bold"
         android:gravity="center"
@@ -29,5 +29,19 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
+
+    <TextView
+        android:id="@+id/tasksEmptyTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:text="Loading tasks…"
+        android:textColor="@android:color/darker_gray"
+        android:textSize="16sp"
+        android:visibility="visible"
+        app:layout_constraintTop_toTopOf="@id/tasksRecyclerView"
+        app:layout_constraintBottom_toBottomOf="@id/tasksRecyclerView"
+        app:layout_constraintStart_toStartOf="@id/tasksRecyclerView"
+        app:layout_constraintEnd_toEndOf="@id/tasksRecyclerView" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

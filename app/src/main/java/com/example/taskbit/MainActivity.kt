@@ -7,7 +7,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.example.taskbit.api.RetrofitClient
+import com.example.taskbit.api.UserModel
 import com.google.android.material.button.MaterialButton
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 class MainActivity : AppCompatActivity() {
 
@@ -62,18 +67,35 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         val isLoggedIn = UserSession.isUserLoggedIn(this)
-        val userPrefs = UserSession.getUserPrefs(this)
-        val coins = userPrefs.getInt("coins", 0)
-        coinsTextView.text = "$coins Coins"
 
         if (isLoggedIn) {
+            coinsTextView.text = "Loading coins…"
             val authPrefs = getSharedPreferences("TaskBitAuth", MODE_PRIVATE)
             val name = authPrefs.getString("name", "User") ?: "User"
             helloTextView.text = "Welcome, $name"
             authActionButton.text = "Logout"
+            loadCurrentCoins()
         } else {
             helloTextView.text = "Welcome to TaskBit"
             authActionButton.text = "Login / Register Account"
+            coinsTextView.text = "Sign in to view coins"
         }
+    }
+
+    private fun loadCurrentCoins() {
+        RetrofitClient.apiService.getCurrentUser().enqueue(object : Callback<UserModel> {
+            override fun onResponse(call: Call<UserModel>, response: Response<UserModel>) {
+                val profile = response.body()
+                coinsTextView.text = if (response.isSuccessful && profile != null) {
+                    "${CoinFormatter.format(profile.points)} Coins"
+                } else {
+                    "Coins unavailable"
+                }
+            }
+
+            override fun onFailure(call: Call<UserModel>, t: Throwable) {
+                coinsTextView.text = "Coins unavailable"
+            }
+        })
     }
 }

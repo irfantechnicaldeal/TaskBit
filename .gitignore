@@ -19,3 +19,4 @@ local.properties
 /backend/.env
 /admin-panel/node_modules
 /admin-panel/dist
+/admin-panel/.env*

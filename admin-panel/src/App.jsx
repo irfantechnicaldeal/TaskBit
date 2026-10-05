@@ -41,14 +41,30 @@ import {
   Zap,
   Target
 } from 'lucide-react';
-import { initialUsers, initialWithdrawals, initialTasks, initialTransactions } from './mockData';
+import { initialUsers, initialWithdrawals, initialTransactions } from './mockData';
 import { API_BASE_URL } from './config';
+import Sidebar from './components/Sidebar';
+import Topbar from './components/Topbar';
+import StatCard from './components/StatCard';
+import StatusBadge from './components/StatusBadge';
+import MiniChart from './components/MiniChart';
+import StatePanel from './components/StatePanel';
+
+const adminFetch = async (path, options = {}) => {
+  const response = await fetch(`${API_BASE_URL}/admin/${path}`, {
+    credentials: 'include',
+    ...options
+  });
+  if (response.status === 401) window.dispatchEvent(new Event('taskbit-admin-unauthorized'));
+  return response;
+};
 
 export default function App() {
   // Auth state (dummy local login)
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [email, setEmail] = useState('admin@taskbit.com');
-  const [password, setPassword] = useState('admin123');
+  const [authChecking, setAuthChecking] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loginError, setLoginError] = useState('');
@@ -56,6 +72,7 @@ export default function App() {
 
   // Navigation state
   const [currentTab, setCurrentTab] = useState('dashboard');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // App data state (with fallback to mockData)
   const [users, setUsers] = useState([]);
@@ -77,7 +94,7 @@ export default function App() {
 
   // Task modal state (Add / Edit)
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
-  const [currentTask, setCurrentTask] = useState({ id: '', title: '', description: '', points: 50, status: 'Active' });
+  const [currentTask, setCurrentTask] = useState({ id: '', title: '', description: '', youtubeUrl: '', points: 50, status: 'Active' });
   const [isEditingTask, setIsEditingTask] = useState(false);
 
   // Withdrawal confirmation dialog state
@@ -91,7 +108,7 @@ export default function App() {
   const [withdrawalTab, setWithdrawalTab] = useState('All');
 
   // Settings state
-  const [adminProfile, setAdminProfile] = useState({ name: 'TaskBit Super Admin', email: 'admin@taskbit.com', notifications: true, twoFactor: true });
+  const [adminProfile, setAdminProfile] = useState({ name: 'TaskBit Administrator', email: '', notifications: true, twoFactor: true });
   const [passwordForm, setPasswordForm] = useState({ current: '', newPass: '', confirm: '' });
   const [passwordMsg, setPasswordMsg] = useState('');
 
@@ -109,9 +126,9 @@ export default function App() {
     setBackendError(null);
     try {
       const [usersRes, withdrawalsRes, tasksRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/users`),
-        fetch(`${API_BASE_URL}/withdrawals`),
-        fetch(`${API_BASE_URL}/tasks`)
+        adminFetch('users'),
+        adminFetch('withdrawals'),
+        adminFetch('tasks')
       ]);
 
       if (!usersRes.ok || !withdrawalsRes.ok || !tasksRes.ok) {
@@ -124,7 +141,7 @@ export default function App() {
 
       setUsers(usersData.length > 0 ? usersData : initialUsers);
       setWithdrawals(withdrawalsData.length > 0 ? withdrawalsData : initialWithdrawals);
-      setTasks(tasksData.length > 0 ? tasksData : initialTasks);
+      setTasks(tasksData);
       setTransactions(initialTransactions);
       setBackendError(null);
     } catch (err) {
@@ -132,7 +149,7 @@ export default function App() {
       setBackendError('Backend offline. Showing TaskBit professional mock theme data.');
       setUsers(initialUsers);
       setWithdrawals(initialWithdrawals);
-      setTasks(initialTasks);
+      setTasks([]);
       setTransactions(initialTransactions);
     } finally {
       setLoading(false);
@@ -140,28 +157,50 @@ export default function App() {
   };
 
   useEffect(() => {
+    const onUnauthorized = () => setIsLoggedIn(false);
+    window.addEventListener('taskbit-admin-unauthorized', onUnauthorized);
+    adminFetch('auth/session')
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data = await res.json();
+        setAdminProfile(profile => ({ ...profile, email: data.admin.email }));
+        setIsLoggedIn(true);
+      })
+      .catch(() => {})
+      .finally(() => setAuthChecking(false));
+    return () => window.removeEventListener('taskbit-admin-unauthorized', onUnauthorized);
+  }, []);
+
+  useEffect(() => {
     if (isLoggedIn) {
       fetchBackendData();
     }
   }, [isLoggedIn]);
 
-  // Handle Login
-  const handleLogin = (e) => {
+  // Authenticate with the backend; the session token stays in an HttpOnly cookie.
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (email === 'admin@taskbit.com' && password === 'admin123') {
+    setLoginError('');
+    try {
+      const res = await adminFetch('auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unable to sign in.');
+      setAdminProfile(profile => ({ ...profile, email: data.admin.email }));
+      setPassword('');
       setIsLoggedIn(true);
-      setLoginError('');
       showToast('Welcome to TaskBit Rewards Enterprise Center!', 'success');
-    } else {
-      setLoginError('Invalid credentials. Use admin@taskbit.com / admin123');
+    } catch (err) {
+      setLoginError(err.message || 'Admin service is unavailable. Please try again.');
     }
   };
 
-  // Handle Forgot Password
-  const handleForgotPassword = (e) => {
-    e.preventDefault();
-    setForgotPasswordMsg('Demo Mode: Use admin@taskbit.com / admin123');
-    setTimeout(() => setForgotPasswordMsg(''), 4000);
+  const handleLogout = async () => {
+    try { await adminFetch('auth/logout', { method: 'POST' }); } catch (err) { console.warn('Could not end admin session on server:', err); }
+    setIsLoggedIn(false);
   };
 
   // Fetch Bank Details for selected user
@@ -172,7 +211,7 @@ export default function App() {
 
     const userId = user._id || user.id;
     try {
-      const res = await fetch(`${API_BASE_URL}/bank-details/${userId}`);
+      const res = await adminFetch(`bank-details/${userId}`);
       if (res.ok) {
         const bankData = await res.json();
         setSelectedUserBank(bankData);
@@ -204,7 +243,7 @@ export default function App() {
     const { id, action } = confirmDialog;
     const newStatus = action === 'approve' ? 'Approved' : 'Rejected';
     try {
-      const res = await fetch(`${API_BASE_URL}/withdrawals/${id}/status`, {
+      const res = await adminFetch(`withdrawals/${id}/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: action === 'approve' ? 'approved' : 'rejected' })
@@ -232,52 +271,46 @@ export default function App() {
     const taskId = currentTask._id || currentTask.id;
     const taskPayload = {
       title: currentTask.title || currentTask.name,
-      description: currentTask.description,
+      description: currentTask.description?.trim() || '',
+      youtubeUrl: currentTask.youtubeUrl?.trim() || '',
       points: currentTask.points,
-      status: currentTask.status
+      status: currentTask.status,
+      ...(currentTask.taskNumber ? { taskNumber: currentTask.taskNumber } : {})
     };
 
     try {
-      if (isEditingTask && taskId && !taskId.toString().startsWith('TSK-')) {
-        const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+      if (isEditingTask && taskId) {
+        const res = await adminFetch(`tasks/${taskId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(taskPayload)
         });
-        if (res.ok) {
-          const updated = await res.json();
-          setTasks(prev => prev.map(t => (t._id === taskId || t.id === taskId) ? updated : t));
-          showToast('Task updated successfully in TaskBit!', 'success');
+        if (!res.ok) {
+          const result = await res.json().catch(() => null);
+          throw new Error(result?.error || 'Task update rejected by backend');
         }
+        const updated = await res.json();
+        setTasks(prev => prev.map(t => (t._id === taskId || t.id === taskId || (t.taskNumber && t.taskNumber === updated.taskNumber)) ? updated : t));
+        showToast('Task updated successfully in TaskBit!', 'success');
       } else {
-        const res = await fetch(`${API_BASE_URL}/tasks`, {
+        const res = await adminFetch('tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(taskPayload)
         });
-        if (res.ok) {
-          const created = await res.json();
-          setTasks(prev => [created, ...prev]);
-          showToast('New TaskBit reward task created!', 'success');
-        } else {
-          const newTask = { ...currentTask, id: `TSK-00${tasks.length + 1}` };
-          setTasks(prev => [newTask, ...prev]);
-          showToast('New TaskBit reward task created!', 'success');
+        if (!res.ok) {
+          const result = await res.json().catch(() => null);
+          throw new Error(result?.error || 'Task creation rejected by backend');
         }
+        const created = await res.json();
+        setTasks(prev => [created, ...prev]);
+        showToast('New TaskBit task created!', 'success');
       }
       setIsTaskModalOpen(false);
-      setCurrentTask({ id: '', title: '', description: '', points: 50, status: 'Active' });
+      setCurrentTask({ id: '', title: '', description: '', youtubeUrl: '', points: 50, status: 'Active' });
     } catch (err) {
       console.warn('Failed to save task to backend:', err);
-      if (isEditingTask) {
-        setTasks(prev => prev.map(t => (t.id === currentTask.id || t._id === currentTask._id) ? currentTask : t));
-        showToast('Task updated successfully!', 'success');
-      } else {
-        const newTask = { ...currentTask, id: `TSK-00${tasks.length + 1}` };
-        setTasks(prev => [newTask, ...prev]);
-        showToast('New TaskBit reward task created!', 'success');
-      }
-      setIsTaskModalOpen(false);
+      showToast(`Task was not saved: ${err.message || 'Check the backend connection and try again.'}`, 'error');
     }
   };
 
@@ -285,15 +318,14 @@ export default function App() {
   const handleDeleteTask = async (id) => {
     if (window.confirm('Are you sure you want to delete this reward task?')) {
       try {
-        if (!id.toString().startsWith('TSK-')) {
-          await fetch(`${API_BASE_URL}/tasks/${id}`, { method: 'DELETE' });
-        }
+        if (id.toString().startsWith('TSK-')) throw new Error('Task is not stored in the backend');
+        const response = await adminFetch(`tasks/${id}`, { method: 'DELETE' });
+        if (!response.ok) throw new Error('Task deletion rejected by backend');
         setTasks(prev => prev.filter(t => t._id !== id && t.id !== id));
         showToast('Task deleted successfully.', 'info');
       } catch (err) {
         console.warn('Failed to delete task on backend:', err);
-        setTasks(prev => prev.filter(t => t._id !== id && t.id !== id));
-        showToast('Task deleted successfully.', 'info');
+        showToast('Task was not deleted. Check the backend connection and try again.', 'error');
       }
     }
   };
@@ -334,6 +366,10 @@ export default function App() {
     return true;
   });
 
+  if (authChecking) {
+    return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white text-sm font-bold">Checking admin session...</div>;
+  }
+
   if (!isLoggedIn) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-indigo-950 flex items-center justify-center p-4 selection:bg-blue-600 selection:text-white">
@@ -371,7 +407,7 @@ export default function App() {
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Password</label>
                 <button
                   type="button"
-                  onClick={() => setForgotPasswordMsg('TaskBit Demo: admin@taskbit.com / admin123')}
+                  onClick={() => setForgotPasswordMsg('Password reset is not configured. Contact your system administrator.')}
                   className="text-xs text-blue-600 hover:underline font-bold"
                 >
                   Forgot?
@@ -428,11 +464,11 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row relative selection:bg-blue-600 selection:text-white font-sans">
+    <div className="admin-shell min-h-screen bg-[#f4f7fb] flex relative selection:bg-blue-600 selection:text-white font-sans">
 
       {/* Toast Notification Banner */}
       {toast && (
-        <div className={`fixed bottom-6 right-6 z-50 px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 text-sm font-black text-white animate-in slide-in-from-bottom-5 duration-300 ${
+        <div className={`fixed bottom-4 left-4 right-4 z-50 flex items-center gap-3 rounded-2xl px-5 py-3.5 text-sm font-bold text-white shadow-2xl animate-in slide-in-from-bottom-5 duration-300 sm:bottom-6 sm:left-auto sm:right-6 ${
           toast.type === 'success' ? 'bg-emerald-600 shadow-emerald-600/40' :
           toast.type === 'info' ? 'bg-blue-600 shadow-blue-600/40' : 'bg-red-600 shadow-red-600/40'
         }`}>
@@ -441,129 +477,22 @@ export default function App() {
         </div>
       )}
 
-      {/* Sidebar with TaskBit Professional Theme */}
-      <aside className="w-full md:w-64 bg-slate-950 text-slate-300 flex flex-col justify-between shrink-0 shadow-2xl border-r border-slate-800/80">
-        <div>
-          <div className="p-6 border-b border-slate-800/80 flex items-center gap-3 bg-slate-900/50">
-            <div className="w-10 h-10 bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-500 rounded-xl flex items-center justify-center text-white font-black shadow-lg shadow-blue-500/20">
-              <Zap size={22} className="fill-current" />
-            </div>
-            <div>
-              <h2 className="text-white font-black text-base tracking-wide flex items-center gap-1.5">
-                TaskBit <span className="text-[10px] bg-blue-600/30 text-blue-400 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">PRO</span>
-              </h2>
-              <p className="text-[10px] uppercase font-bold tracking-widest text-slate-400">Rewards & Fintech</p>
-            </div>
-          </div>
-
-          <nav className="p-4 space-y-1.5">
-            <button
-              onClick={() => setCurrentTab('dashboard')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition ${currentTab === 'dashboard' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' : 'hover:bg-slate-900 text-slate-400 hover:text-slate-200'}`}
-            >
-              <LayoutDashboard size={18} />
-              <span>Dashboard</span>
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('users')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition ${currentTab === 'users' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' : 'hover:bg-slate-900 text-slate-400 hover:text-slate-200'}`}
-            >
-              <Users size={18} />
-              <span>Users</span>
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('withdrawals')}
-              className={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-bold text-sm transition ${currentTab === 'withdrawals' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' : 'hover:bg-slate-900 text-slate-400 hover:text-slate-200'}`}
-            >
-              <div className="flex items-center gap-3">
-                <Wallet size={18} />
-                <span>Withdrawals</span>
-              </div>
-              {pendingWithdrawalsCount > 0 && (
-                <span className="bg-amber-500 text-slate-950 font-black text-xs px-2 py-0.5 rounded-full shadow">
-                  {pendingWithdrawalsCount}
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('tasks')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition ${currentTab === 'tasks' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' : 'hover:bg-slate-900 text-slate-400 hover:text-slate-200'}`}
-            >
-              <CheckSquare size={18} />
-              <span>Tasks</span>
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('transactions')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition ${currentTab === 'transactions' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' : 'hover:bg-slate-900 text-slate-400 hover:text-slate-200'}`}
-            >
-              <ArrowLeftRight size={18} />
-              <span>Transactions</span>
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('bank-details')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition ${currentTab === 'bank-details' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' : 'hover:bg-slate-900 text-slate-400 hover:text-slate-200'}`}
-            >
-              <CreditCard size={18} />
-              <span>Bank Details</span>
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('settings')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition ${currentTab === 'settings' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' : 'hover:bg-slate-900 text-slate-400 hover:text-slate-200'}`}
-            >
-              <SettingsIcon size={18} />
-              <span>Settings</span>
-            </button>
-          </nav>
-        </div>
-
-        <div className="p-4 border-t border-slate-800 bg-slate-950">
-          <button
-            onClick={() => setIsLoggedIn(false)}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm text-red-400 hover:bg-red-500/10 transition"
-          >
-            <LogOut size={18} />
-            <span>Logout</span>
-          </button>
-        </div>
-      </aside>
+      <Sidebar
+        currentTab={currentTab}
+        setCurrentTab={setCurrentTab}
+        pendingCount={pendingWithdrawalsCount}
+        onLogout={handleLogout}
+        mobileOpen={mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+      />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-
-        {/* Top Navbar */}
-        <header className="bg-white/90 backdrop-blur-md border-b border-slate-200/80 h-16 px-6 flex items-center justify-between sticky top-0 z-20 shadow-xs">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-black text-slate-900 tracking-tight capitalize">{currentTab.replace('-', ' ')}</h2>
-            <button
-              onClick={fetchBackendData}
-              disabled={loading}
-              className="ml-4 inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition shadow-xs"
-              title="Refresh Data from Backend"
-            >
-              <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-              <span>{loading ? 'Syncing...' : 'Sync API'}</span>
-            </button>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="text-right hidden sm:block">
-              <p className="text-sm font-bold text-slate-900">{adminProfile.name}</p>
-              <p className="text-xs text-slate-500">{adminProfile.email}</p>
-            </div>
-            <div className="w-10 h-10 bg-gradient-to-tr from-blue-600 to-indigo-600 font-black text-white rounded-full flex items-center justify-center shadow-md">
-              SA
-            </div>
-          </div>
-        </header>
+      <main className="min-h-screen min-w-0 flex-1">
+        <Topbar currentTab={currentTab} adminProfile={adminProfile} loading={loading} onRefresh={fetchBackendData} onMenu={() => setMobileNavOpen(true)} />
 
         {/* Backend Offline / Error Banner */}
         {backendError && (
-          <div className="bg-amber-50 border-b border-amber-200 px-6 py-3 flex items-center justify-between text-amber-900 text-xs sm:text-sm font-semibold">
+          <div className="flex items-center justify-between gap-4 border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900 sm:px-6 sm:text-sm">
             <div className="flex items-center gap-2">
               <Server size={18} className="text-amber-600 shrink-0" />
               <span>{backendError}</span>
@@ -578,7 +507,7 @@ export default function App() {
         )}
 
         {/* Dynamic Screen Content */}
-        <div className="p-6 md:p-8 max-w-7xl mx-auto w-full">
+        <div className="mx-auto w-full max-w-[1440px] p-4 sm:p-6 lg:p-8">
 
           {/* Loading Skeletons */}
           {loading && users.length === 0 && (
@@ -598,31 +527,9 @@ export default function App() {
               {/* Metric Cards with TaskBit Theme Gradients */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
 
-                <div className="bg-white p-6 rounded-2xl shadow-xs border border-slate-200/80 flex items-center justify-between hover:shadow-md transition group">
-                  <div>
-                    <p className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Total Users</p>
-                    <h3 className="text-3xl font-black text-slate-900 mt-1">{totalUsers}</h3>
-                    <span className="text-xs font-bold text-emerald-600 flex items-center gap-1 mt-1">
-                      <UserCheck size={14} /> {activeUsers} Active
-                    </span>
-                  </div>
-                  <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center shadow-xs group-hover:scale-105 transition">
-                    <Users size={26} />
-                  </div>
-                </div>
+                <StatCard label="Total users" value={totalUsers.toLocaleString()} note={`${activeUsers} active accounts`} icon={Users} tone="blue" />
 
-                <div className="bg-white p-6 rounded-2xl shadow-xs border border-slate-200/80 flex items-center justify-between hover:shadow-md transition group">
-                  <div>
-                    <p className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Total Points</p>
-                    <h3 className="text-3xl font-black text-slate-900 mt-1">{totalPoints.toLocaleString()}</h3>
-                    <span className="text-xs font-bold text-amber-600 flex items-center gap-1 mt-1">
-                      <Award size={14} /> Aggregate pool
-                    </span>
-                  </div>
-                  <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center shadow-xs group-hover:scale-105 transition">
-                    <Award size={26} />
-                  </div>
-                </div>
+                <StatCard label="Points in circulation" value={totalPoints.toLocaleString()} note="Current user point balances" icon={Award} tone="cyan" />
 
                 <div className="bg-white p-6 rounded-2xl shadow-xs border border-slate-200/80 flex items-center justify-between hover:shadow-md transition group">
                   <div>
@@ -685,6 +592,21 @@ export default function App() {
                 </div>
               </div>
 
+              <section className="admin-panel-card p-5 sm:p-6">
+                <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Withdrawal status</h3>
+                    <p className="mt-1 text-xs text-slate-500">Live distribution of requests currently loaded</p>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Current snapshot</span>
+                </div>
+                <MiniChart items={[
+                  { label: 'Pending', value: pendingWithdrawalsCount },
+                  { label: 'Approved', value: approvedWithdrawalsCount },
+                  { label: 'Rejected', value: rejectedWithdrawalsCount }
+                ]} />
+              </section>
+
               {/* Activity Chart Summary & Recent Tables */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
 
@@ -711,9 +633,7 @@ export default function App() {
                             <td className="py-3 px-3 font-semibold text-amber-600">{u.points || 0} pts</td>
                             <td className="py-3 px-3 font-semibold text-emerald-600">₹{(u.balance || 0).toFixed(2)}</td>
                             <td className="py-3 px-3">
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                                {u.status || 'Active'}
-                              </span>
+                              <StatusBadge status={u.status || 'Active'} />
                             </td>
                           </tr>
                         ))}
@@ -745,12 +665,7 @@ export default function App() {
                             <td className="py-3 px-3 font-bold text-slate-900">₹{(w.amount || 0).toFixed(2)}</td>
                             <td className="py-3 px-3 text-slate-600">{w.method}</td>
                             <td className="py-3 px-3">
-                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                (w.status || '').toLowerCase() === 'approved' ? 'bg-emerald-100 text-emerald-800' :
-                                (w.status || '').toLowerCase() === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
-                              }`}>
-                                {w.status}
-                              </span>
+                              <StatusBadge status={w.status} />
                             </td>
                           </tr>
                         ))}
@@ -826,11 +741,7 @@ export default function App() {
                           <td className="py-4 px-4 font-semibold text-slate-700">₹{(u.totalWithdrawn || 0).toFixed(2)}</td>
                           <td className="py-4 px-4 text-slate-500 text-xs">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : 'N/A'}</td>
                           <td className="py-4 px-4">
-                            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                              (u.status || 'Active') === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
-                            }`}>
-                              {u.status || 'Active'}
-                            </span>
+                            <StatusBadge status={u.status || 'Active'} />
                           </td>
                           <td className="py-4 px-4 text-center">
                             <button
@@ -844,7 +755,7 @@ export default function App() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan="10" className="py-12 text-center text-slate-400 italic">No users found matching your search criteria.</td>
+                        <td colSpan="10"><StatePanel title="No users match these filters" description="Try a different name, email, or status filter." icon={Users} /></td>
                       </tr>
                     )}
                   </tbody>
@@ -900,12 +811,7 @@ export default function App() {
                           </td>
                           <td className="py-4 px-4 text-slate-500 text-xs">{w.date || new Date(w.createdAt || Date.now()).toLocaleString()}</td>
                           <td className="py-4 px-4">
-                            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                              (w.status || '').toLowerCase() === 'approved' ? 'bg-emerald-100 text-emerald-800' :
-                              (w.status || '').toLowerCase() === 'rejected' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
-                            }`}>
-                              {w.status}
-                            </span>
+                            <StatusBadge status={w.status} />
                           </td>
                           <td className="py-4 px-4 text-center">
                             {(w.status || '').toLowerCase() === 'pending' ? (
@@ -931,7 +837,7 @@ export default function App() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan="7" className="py-12 text-center text-slate-400 italic">No withdrawal requests found.</td>
+                        <td colSpan="7"><StatePanel title="No requests in this view" description="Change the status filter or check back when requests arrive." icon={Wallet} /></td>
                       </tr>
                     )}
                   </tbody>
@@ -950,7 +856,7 @@ export default function App() {
                 </div>
                 <button
                   onClick={() => {
-                    setCurrentTask({ id: '', title: '', description: '', points: 50, status: 'Active' });
+                    setCurrentTask({ id: '', title: '', description: '', youtubeUrl: '', points: 50, status: 'Active' });
                     setIsEditingTask(false);
                     setIsTaskModalOpen(true);
                   }}
@@ -965,9 +871,10 @@ export default function App() {
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
                       <th className="py-3 px-4">Task ID</th>
+                      <th className="py-3 px-4">Task Number</th>
                       <th className="py-3 px-4">Task Title</th>
                       <th className="py-3 px-4">Description</th>
-                      <th className="py-3 px-4">Points</th>
+                      <th className="py-3 px-4">Admin Points</th>
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4">Created Date</th>
                       <th className="py-3 px-4 text-center">Actions</th>
@@ -975,18 +882,27 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-sm">
                     {tasks.length > 0 ? (
-                      tasks.map(t => (
+                      [...tasks].sort((left, right) => {
+                        const leftNumber = Number.isInteger(left.taskNumber) && left.taskNumber >= 1 && left.taskNumber <= 50
+                          ? left.taskNumber : Number.MAX_SAFE_INTEGER;
+                        const rightNumber = Number.isInteger(right.taskNumber) && right.taskNumber >= 1 && right.taskNumber <= 50
+                          ? right.taskNumber : Number.MAX_SAFE_INTEGER;
+                        return leftNumber - rightNumber || String(left.title || '').localeCompare(String(right.title || ''));
+                      }).map(t => (
                         <tr key={t._id || t.id} className="hover:bg-slate-50 transition">
                           <td className="py-4 px-4 font-mono font-bold text-slate-800 text-xs">{(t._id || t.id).toString().slice(-8)}</td>
+                          <td className="py-4 px-4">
+                            {Number.isInteger(t.taskNumber) && t.taskNumber >= 1 && t.taskNumber <= 50 ? (
+                              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">#{t.taskNumber}</span>
+                            ) : (
+                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">Legacy</span>
+                            )}
+                          </td>
                           <td className="py-4 px-4 font-bold text-slate-900">{t.title || t.name}</td>
                           <td className="py-4 px-4 text-slate-600 max-w-xs truncate text-xs">{t.description}</td>
-                          <td className="py-4 px-4 font-extrabold text-amber-600">{t.points || 50} pts</td>
+                          <td className="py-4 px-4 font-extrabold text-amber-600">{t.points ?? 0} pts</td>
                           <td className="py-4 px-4">
-                            <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                              (t.status || '').toLowerCase() === 'active' || !t.completed ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
-                            }`}>
-                              {t.status || 'Active'}
-                            </span>
+                            <StatusBadge status={t.status || (t.completed ? 'Completed' : 'Active')} />
                           </td>
                           <td className="py-4 px-4 text-slate-500 text-xs">{t.createdAt ? new Date(t.createdAt).toLocaleDateString() : 'N/A'}</td>
                           <td className="py-4 px-4 text-center">
@@ -995,7 +911,9 @@ export default function App() {
                                 onClick={() => {
                                   setCurrentTask({
                                     ...t,
-                                    title: t.title || t.name
+                                    title: t.title || t.name,
+                                    description: t.description || '',
+                                    youtubeUrl: t.youtubeUrl || ''
                                   });
                                   setIsEditingTask(true);
                                   setIsTaskModalOpen(true);
@@ -1018,7 +936,7 @@ export default function App() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan="7" className="py-12 text-center text-slate-400 italic">No tasks found. Create one above.</td>
+                        <td colSpan="8"><StatePanel title="No reward tasks yet" description="Create a task to make it available to app users." icon={CheckSquare} /></td>
                       </tr>
                     )}
                   </tbody>
@@ -1049,7 +967,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-sm">
-                    {transactions.map(tx => (
+                    {transactions.length > 0 ? transactions.map(tx => (
                       <tr key={tx.id} className="hover:bg-slate-50 transition">
                         <td className="py-4 px-4 font-mono font-bold text-slate-800 text-xs">{tx.id}</td>
                         <td className="py-4 px-4 font-bold text-slate-900">{tx.userName}</td>
@@ -1065,12 +983,10 @@ export default function App() {
                         <td className="py-4 px-4 font-bold text-amber-600">{tx.points}</td>
                         <td className="py-4 px-4 text-slate-500 text-xs">{tx.date}</td>
                         <td className="py-4 px-4">
-                          <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
-                            {tx.status}
-                          </span>
+                          <StatusBadge status={tx.status} />
                         </td>
                       </tr>
-                    ))}
+                    )) : <tr><td colSpan="7"><StatePanel title="No transactions to show" description="Transaction activity will appear here when available." icon={ArrowLeftRight} /></td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -1084,7 +1000,7 @@ export default function App() {
               <p className="text-xs text-slate-500 mb-6">Sensitive user banking records with masked account numbers for privacy and regulatory compliance.</p>
 
               <div className="space-y-4">
-                {users.map(u => (
+                {users.length > 0 ? users.map(u => (
                   <div key={u._id || u.id} className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div>
                       <h4 className="font-bold text-slate-900 text-sm">{u.name}</h4>
@@ -1100,7 +1016,7 @@ export default function App() {
                       Secure Masked
                     </span>
                   </div>
-                ))}
+                )) : <StatePanel title="No user records available" description="Users with payout information will appear here." icon={CreditCard} />}
               </div>
             </div>
           )}
@@ -1128,7 +1044,7 @@ export default function App() {
                     <input
                       type="email"
                       value={adminProfile.email}
-                      onChange={(e) => setAdminProfile({ ...adminProfile, email: e.target.value })}
+                      readOnly
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-white font-medium"
                     />
                   </div>
@@ -1170,13 +1086,24 @@ export default function App() {
                     />
                   </div>
                   <button
-                    onClick={() => {
-                      if (passwordForm.newPass && passwordForm.newPass === passwordForm.confirm) {
-                        setPasswordMsg('');
+                    onClick={async () => {
+                      if (!passwordForm.current || passwordForm.newPass.length < 12 || passwordForm.newPass !== passwordForm.confirm) {
+                        setPasswordMsg('Enter your current password and matching new passwords of at least 12 characters.');
+                        return;
+                      }
+                      try {
+                        const res = await adminFetch('auth/change-password', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ currentPassword: passwordForm.current, newPassword: passwordForm.newPass })
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.error || 'Could not change password.');
+                        setPasswordMsg(data.message);
                         setPasswordForm({ current: '', newPass: '', confirm: '' });
-                        showToast('Password changed successfully!', 'success');
-                      } else {
-                        setPasswordMsg('Passwords do not match or fields are empty.');
+                        setIsLoggedIn(false);
+                      } catch (err) {
+                        setPasswordMsg(err.message);
                       }
                     }}
                     className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-xs"
@@ -1376,16 +1303,27 @@ export default function App() {
                 <textarea
                   value={currentTask.description}
                   onChange={(e) => setCurrentTask({ ...currentTask, description: e.target.value })}
-                  required
                   rows="3"
                   placeholder="Task instructions..."
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
                 ></textarea>
               </div>
 
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Video URL</label>
+                <input
+                  type="url"
+                  value={currentTask.youtubeUrl || ''}
+                  onChange={(e) => setCurrentTask({ ...currentTask, youtubeUrl: e.target.value })}
+                  required={currentTask.status === 'Active'}
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
+                />
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Points Reward</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Admin Task Points</label>
                   <input
                     type="number"
                     value={currentTask.points}
@@ -1393,6 +1331,7 @@ export default function App() {
                     required
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
                   />
+                  <p className="mt-1 text-[11px] text-slate-500">User completion reward is fixed at 0.5 coin and does not use this field.</p>
                 </div>
 
                 <div>

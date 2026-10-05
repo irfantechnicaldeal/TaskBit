@@ -64,7 +64,9 @@ class OtpActivity : AppCompatActivity() {
                     override fun onResponse(call: Call<AuthResponse>, response: Response<AuthResponse>) {
                         if (response.isSuccessful && response.body() != null) {
                             val authResp = response.body()!!
-                            prefs.edit().putString("auth_token", authResp.token ?: "").apply()
+                            val editor = prefs.edit().putString("auth_token", authResp.token ?: "")
+                            authResp.user?.id?.let { userId -> editor.putString("user_id", userId) }
+                            editor.apply()
                         }
                     }
                     override fun onFailure(call: Call<AuthResponse>, t: Throwable) {

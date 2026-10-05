@@ -15,7 +15,9 @@
         android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
+        android:name=".TaskBitApplication"
         android:allowBackup="true"
+        android:usesCleartextTraffic="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@drawable/logo"

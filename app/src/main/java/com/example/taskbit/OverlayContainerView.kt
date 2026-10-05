@@ -2,6 +2,7 @@ package com.example.taskbit
 
 import android.content.Context
 import android.util.AttributeSet
+import android.view.MotionEvent
 import android.widget.FrameLayout
 
 class OverlayContainerView @JvmOverloads constructor(
@@ -10,12 +11,13 @@ class OverlayContainerView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : FrameLayout(context, attrs, defStyleAttr) {
 
-    var onWindowFocusLostListener: (() -> Unit)? = null
+    override fun onTouchEvent(event: MotionEvent?): Boolean {
+        performClick()
+        return true
+    }
 
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus) {
-            onWindowFocusLostListener?.invoke()
-        }
+    override fun performClick(): Boolean {
+        super.performClick()
+        return true
     }
 }

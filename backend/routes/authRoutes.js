@@ -4,11 +4,12 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'taskbit_secure_jwt_secret_key_2026';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
     try {
+        if (!JWT_SECRET) return res.status(503).json({ error: 'User authentication is not configured' });
         const { name, email, phone, password } = req.body;
 
         if (!name || !email || !password) {
@@ -50,6 +51,7 @@ router.post('/register', async (req, res) => {
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
     try {
+        if (!JWT_SECRET) return res.status(503).json({ error: 'User authentication is not configured' });
         const { identifier, email, phone, mobile, password } = req.body;
         const loginId = identifier || email || phone || mobile;
 
