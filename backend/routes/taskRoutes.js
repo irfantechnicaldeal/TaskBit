@@ -7,7 +7,7 @@ const TaskCompletion = require('../models/TaskCompletion');
 const User = require('../models/User');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { requireUser } = require('../middleware/requireUser');
-const { REWARD_UNITS_PER_TASK, coinsFromRewardUnits } = require('../utils/taskReward');
+const { REWARD_UNITS_PER_TASK, coinsFromRewardUnits, rupeesFromRewardUnits } = require('../utils/taskReward');
 
 const activeTaskFilter = {
     $and: [
@@ -124,8 +124,17 @@ router.post('/:taskId/complete', (req, res, next) => {
     if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
         return res.status(400).json({ error: 'Task completion does not accept user, cycle, or reward values' });
     }
-    if (!mongoose.isValidObjectId(req.params.taskId)) {
-        return res.status(400).json({ error: 'Invalid task ID' });
+    let taskQuery;
+    if (mongoose.isValidObjectId(req.params.taskId)) {
+        taskQuery = { _id: req.params.taskId, ...activeTaskFilter };
+    } else {
+        const numMatch = req.params.taskId.match(/\d+/);
+        const taskNum = numMatch ? parseInt(numMatch[0], 10) : NaN;
+        if (!isNaN(taskNum) && taskNum >= 1 && taskNum <= 50) {
+            taskQuery = { taskNumber: taskNum, ...activeTaskFilter };
+        } else {
+            taskQuery = { _id: req.params.taskId, ...activeTaskFilter };
+        }
     }
 
     let session;
@@ -141,7 +150,7 @@ router.post('/:taskId/complete', (req, res, next) => {
                 return;
             }
 
-            const task = await Task.findOne({ _id: req.params.taskId, ...activeTaskFilter }).session(session);
+            const task = await Task.findOne(taskQuery).session(session);
             if (!task) {
                 outcome = { kind: 'task-unavailable' };
                 return;
@@ -183,6 +192,9 @@ router.post('/:taskId/complete', (req, res, next) => {
             // 2 reward units = 1 coin. Every completion grants 1 unit = exactly 0.5 coin.
             user.taskRewardUnits = (user.taskRewardUnits || 0) + REWARD_UNITS_PER_TASK;
             user.points = (user.points || 0) + coinsFromRewardUnits(REWARD_UNITS_PER_TASK);
+            const earnedRupees = rupeesFromRewardUnits(REWARD_UNITS_PER_TASK);
+            user.balance = Number(((user.balance || 0) + earnedRupees).toFixed(2));
+            user.totalEarned = Number(((user.totalEarned || 0) + earnedRupees).toFixed(2));
             user.currentTaskCycle = cycleCompleted ? cycle + 1 : cycle;
             await user.save({ session });
 
@@ -190,6 +202,9 @@ router.post('/:taskId/complete', (req, res, next) => {
                 kind: 'completed',
                 points: user.points,
                 rewardUnits: REWARD_UNITS_PER_TASK,
+                rewardRupees: earnedRupees,
+                balance: user.balance,
+                totalEarned: user.totalEarned,
                 completedCycle: cycle,
                 currentCycle: user.currentTaskCycle,
                 cycleCompleted,
@@ -222,6 +237,9 @@ router.post('/:taskId/complete', (req, res, next) => {
             points: outcome.points,
             rewardUnits: outcome.rewardUnits,
             rewardCoins: coinsFromRewardUnits(outcome.rewardUnits),
+            rewardRupees: outcome.rewardRupees,
+            balance: outcome.balance,
+            totalEarned: outcome.totalEarned,
             completedCycle: outcome.completedCycle,
             currentCycle: outcome.currentCycle,
             cycleCompleted: outcome.cycleCompleted,
