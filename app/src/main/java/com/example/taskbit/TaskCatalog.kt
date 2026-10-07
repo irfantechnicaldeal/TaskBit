@@ -1,18 +1,29 @@
 package com.example.taskbit
 
 import com.example.taskbit.api.TaskModel
+import java.net.URI
 
 object TaskCatalog {
-    fun orderedBackendTasks(tasks: List<TaskModel>): List<TaskModel> =
-        tasks.asSequence()
-            .sortedWith(compareBy<TaskModel> { it.taskNumber == null }.thenBy { it.taskNumber ?: Int.MAX_VALUE })
-            .toList()
+    fun orderedBackendTasks(tasks: List<TaskModel>): List<TaskModel> {
+        return tasks.sortedBy { task ->
+            task.taskNumber
+                ?: extractNumberFromTitle(task.title)
+                ?: Int.MAX_VALUE
+        }
+    }
+
+    private fun extractNumberFromTitle(title: String?): Int? {
+        if (title.isNullOrBlank()) return null
+        val regex = Regex("""#(\d+)""")
+        val match = regex.find(title)
+        return match?.groupValues?.get(1)?.toIntOrNull()
+    }
 }
 
 object TaskVideoUrl {
     fun normalize(rawUrl: String?): String? {
         val value = rawUrl?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        val uri = runCatching { java.net.URI(value) }.getOrNull() ?: return null
+        val uri = runCatching { URI(value) }.getOrNull() ?: return null
         if (!uri.scheme.equals("https", ignoreCase = true)) return null
 
         val host = uri.host?.lowercase() ?: return null

@@ -60,7 +60,13 @@ router.post('/login', async (req, res) => {
         }
 
         // Find user by email or phone
-        const user = await User.findOne({ $or: [{ email: loginId }, { phone: loginId }] });
+        const user = await User.findOne({
+            $or: [
+                { email: loginId },
+                { phone: loginId },
+                { email: `${loginId}@taskbit.com` }
+            ]
+        });
         if (!user) {
             return res.status(401).json({ error: 'Invalid email/mobile or password' });
         }

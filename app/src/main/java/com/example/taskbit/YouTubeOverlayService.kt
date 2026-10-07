@@ -35,13 +35,16 @@ class YouTubeOverlayService : Service() {
     private var timer: CountDownTimer? = null
     private var isCountdownFinished = false
     private var currentTaskId: String? = null
+    private var startTimestamp: Long = 0L
 
     companion object {
         private const val TAG = "TaskVideoLaunch"
         private const val CHANNEL_ID = "taskbit_overlay"
         private const val NOTIFICATION_ID = 1001
         const val EXTRA_TASK_ID = "taskbit_task_id"
+        const val EXTRA_VIDEO_URL = "taskbit_video_url"
         var isServiceRunning = false
+        var activeVideoUrl: String? = null
     }
 
     override fun onCreate() {
@@ -57,7 +60,9 @@ class YouTubeOverlayService : Service() {
     ): Int {
 
         startForegroundServiceNotification()
+        startTimestamp = System.currentTimeMillis()
         currentTaskId = intent?.getStringExtra(EXTRA_TASK_ID)
+        activeVideoUrl = intent?.getStringExtra(EXTRA_VIDEO_URL)
         Log.i(TAG, "Countdown service started for taskId=$currentTaskId")
 
         if (!Settings.canDrawOverlays(this)) {
@@ -141,7 +146,9 @@ class YouTubeOverlayService : Service() {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 windowType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
@@ -258,6 +265,12 @@ class YouTubeOverlayService : Service() {
         val taskId = currentTaskId
         if (taskId.isNullOrBlank()) {
             returnToTasks(completionError = "Task could not be identified. No coins were added.")
+            return
+        }
+
+        val elapsed = System.currentTimeMillis() - startTimestamp
+        if (elapsed < 28_000L) {
+            returnToTasks(completionError = "Task failed: Watch time too short. No coins added.")
             return
         }
 

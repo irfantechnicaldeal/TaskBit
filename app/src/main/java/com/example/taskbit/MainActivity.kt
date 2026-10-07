@@ -3,6 +3,7 @@ package com.example.taskbit
 import android.content.Intent
 import android.os.Bundle
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -54,7 +55,13 @@ class MainActivity : AppCompatActivity() {
             if (isLoggedIn) {
                 // Logout
                 val authPrefs = getSharedPreferences("TaskBitAuth", MODE_PRIVATE)
-                authPrefs.edit().putBoolean("isLoggedIn", false).remove("logged_in_mobile").apply()
+                authPrefs.edit()
+                    .putBoolean("isLoggedIn", false)
+                    .remove("logged_in_mobile")
+                    .remove("auth_token")
+                    .remove("user_id")
+                    .apply()
+                Toast.makeText(this, "Logged out successfully", Toast.LENGTH_SHORT).show()
                 onResume()
             } else {
                 // Login

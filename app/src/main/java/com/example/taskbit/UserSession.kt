@@ -14,7 +14,9 @@ object UserSession {
 
     fun isUserLoggedIn(context: Context): Boolean {
         val authPrefs = context.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE)
-        return authPrefs.getBoolean("isLoggedIn", false)
+        val isLoggedIn = authPrefs.getBoolean("isLoggedIn", false)
+        val token = authPrefs.getString("auth_token", null)
+        return isLoggedIn && !token.isNullOrBlank()
     }
 
     fun getLoggedInMobile(context: Context): String {

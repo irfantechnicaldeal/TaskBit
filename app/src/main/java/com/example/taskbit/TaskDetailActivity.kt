@@ -45,7 +45,7 @@ class TaskDetailActivity : AppCompatActivity() {
         super.onResume()
 
         if (YouTubeOverlayService.isServiceRunning) {
-            Toast.makeText(this, "Task failed! You left YouTube before 30 seconds.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Task failed! You left the task early (Back/Home/Recents). No coins added.", Toast.LENGTH_LONG).show()
             stopService(Intent(this, YouTubeOverlayService::class.java))
             YouTubeOverlayService.isServiceRunning = false
         }
@@ -80,6 +80,9 @@ class TaskDetailActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        if (YouTubeOverlayService.isServiceRunning) {
+            setTheme(R.style.Theme_TaskBit_Transparent)
+        }
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContentView(R.layout.activity_task_detail)
@@ -150,14 +153,14 @@ class TaskDetailActivity : AppCompatActivity() {
         val taskId = task.id
         val videoUrl = TaskVideoUrl.normalize(task.youtubeUrl)
         if (taskId.isNullOrBlank() || videoUrl.isNullOrBlank()) {
-            Log.e(TAG, "Cannot launch task: taskId/url missing or URL is not a supported YouTube URL; taskNumber=${task.taskNumber}, taskId=$taskId")
-            Toast.makeText(this, "This task has no valid video configured", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "This task has no valid video configured", Toast.LENGTH_SHORT).show()
             return
         }
         if (task.completed) {
             Toast.makeText(this, "This task is already complete for the current cycle", Toast.LENGTH_SHORT).show()
             return
         }
+
         if (!Settings.canDrawOverlays(this)) {
             Toast.makeText(this, "Please enable 'Display over other apps' permission for TaskBit to show the reward timer", Toast.LENGTH_LONG).show()
             val permissionIntent = Intent(
@@ -166,41 +169,40 @@ class TaskDetailActivity : AppCompatActivity() {
             )
             startActivity(permissionIntent)
             return
-        } else {
-            val serviceIntent = Intent(this, YouTubeOverlayService::class.java).apply {
-                putExtra(YouTubeOverlayService.EXTRA_TASK_ID, taskId)
-            }
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(serviceIntent)
-                } else {
-                    startService(serviceIntent)
-                }
-                Log.i(TAG, "Countdown service start requested for taskId=$taskId")
-            } catch (error: Exception) {
-                // The task URL must still open even if the optional countdown overlay cannot start.
-                Log.e(TAG, "Countdown service could not start; continuing to YouTube", error)
-            }
         }
-        Log.i(TAG, "Task tap uses backend task response; taskNumber=${task.taskNumber}, taskId=$taskId, finalUrl=$videoUrl")
+
+        val serviceIntent = Intent(this, YouTubeOverlayService::class.java).apply {
+            putExtra(YouTubeOverlayService.EXTRA_TASK_ID, taskId)
+            putExtra(YouTubeOverlayService.EXTRA_VIDEO_URL, videoUrl)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+        } catch (error: Exception) {
+            Log.e(TAG, "Countdown service could not start", error)
+        }
+
         openYouTube(videoUrl)
     }
 
     private fun openYouTube(videoUrl: String) {
         val trimmedUrl = videoUrl.trim()
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(trimmedUrl))
+        val ytIntent = Intent(Intent.ACTION_VIEW, Uri.parse(trimmedUrl)).apply {
+            setPackage("com.google.android.youtube")
+        }
         try {
-            Log.i(TAG, "Dispatching ACTION_VIEW with current task URL: $trimmedUrl")
-            startActivity(intent)
-            Log.i(TAG, "ACTION_VIEW dispatched successfully for URL: $trimmedUrl")
-        } catch (error: ActivityNotFoundException) {
-            Log.e(TAG, "No browser or YouTube app can handle ACTION_VIEW for URL: $trimmedUrl", error)
-            Toast.makeText(this, "YouTube ya browser app nahi mila", Toast.LENGTH_LONG).show()
-            stopService(Intent(this, YouTubeOverlayService::class.java))
-        } catch (error: Exception) {
-            Log.e(TAG, "ACTION_VIEW failed for URL: $trimmedUrl", error)
-            Toast.makeText(this, "YouTube open nahi ho pa raha: ${error.message}", Toast.LENGTH_LONG).show()
-            stopService(Intent(this, YouTubeOverlayService::class.java))
+            startActivity(ytIntent)
+        } catch (_: ActivityNotFoundException) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(trimmedUrl)))
+            } catch (_: Exception) {
+                Toast.makeText(this, "Could not open YouTube app", Toast.LENGTH_SHORT).show()
+            }
+        } catch (_: Exception) {
+            Toast.makeText(this, "Could not open YouTube", Toast.LENGTH_SHORT).show()
         }
     }
 

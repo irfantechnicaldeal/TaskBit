@@ -30,8 +30,6 @@ import {
   Info,
   ChevronRight,
   Activity,
-  ArrowUpRight,
-  ArrowDownLeft,
   UserCheck,
   UserX,
   Sparkles,
@@ -41,7 +39,6 @@ import {
   Zap,
   Target
 } from 'lucide-react';
-import { initialUsers, initialWithdrawals, initialTransactions } from './mockData';
 import { API_BASE_URL } from './config';
 import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
@@ -60,7 +57,7 @@ const adminFetch = async (path, options = {}) => {
 };
 
 export default function App() {
-  // Auth state (dummy local login)
+  // Auth state is verified by the backend session cookie.
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   const [email, setEmail] = useState('');
@@ -74,11 +71,10 @@ export default function App() {
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
-  // App data state (with fallback to mockData)
+  // App data state (backend is the only source of truth)
   const [users, setUsers] = useState([]);
   const [withdrawals, setWithdrawals] = useState([]);
   const [tasks, setTasks] = useState([]);
-  const [transactions, setTransactions] = useState([]);
 
   // Loading & error state
   const [loading, setLoading] = useState(false);
@@ -91,6 +87,7 @@ export default function App() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [selectedUserBank, setSelectedUserBank] = useState(null);
   const [bankLoading, setBankLoading] = useState(false);
+  const [bankError, setBankError] = useState(null);
 
   // Task modal state (Add / Edit)
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
@@ -102,13 +99,12 @@ export default function App() {
 
   // Users filter state
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('All');
 
   // Withdrawals tab state
   const [withdrawalTab, setWithdrawalTab] = useState('All');
 
   // Settings state
-  const [adminProfile, setAdminProfile] = useState({ name: 'TaskBit Administrator', email: '', notifications: true, twoFactor: true });
+  const [adminProfile, setAdminProfile] = useState({ name: 'Administrator', email: '' });
   const [passwordForm, setPasswordForm] = useState({ current: '', newPass: '', confirm: '' });
   const [passwordMsg, setPasswordMsg] = useState('');
 
@@ -120,7 +116,7 @@ export default function App() {
     }, 4000);
   };
 
-  // Fetch all data from backend API with fallback
+  // Fetch all data from backend API
   const fetchBackendData = async () => {
     setLoading(true);
     setBackendError(null);
@@ -139,18 +135,16 @@ export default function App() {
       const withdrawalsData = await withdrawalsRes.json();
       const tasksData = await tasksRes.json();
 
-      setUsers(usersData.length > 0 ? usersData : initialUsers);
-      setWithdrawals(withdrawalsData.length > 0 ? withdrawalsData : initialWithdrawals);
+      setUsers(usersData);
+      setWithdrawals(withdrawalsData);
       setTasks(tasksData);
-      setTransactions(initialTransactions);
       setBackendError(null);
     } catch (err) {
-      console.warn('Backend unavailable, falling back to mock data:', err);
-      setBackendError('Backend offline. Showing TaskBit professional mock theme data.');
-      setUsers(initialUsers);
-      setWithdrawals(initialWithdrawals);
+      console.warn('Backend unavailable:', err);
+      setBackendError('Could not load admin data from the backend. Check the connection and retry.');
+      setUsers([]);
+      setWithdrawals([]);
       setTasks([]);
-      setTransactions(initialTransactions);
     } finally {
       setLoading(false);
     }
@@ -207,6 +201,7 @@ export default function App() {
   const handleViewUser = async (user) => {
     setSelectedUser(user);
     setSelectedUserBank(null);
+    setBankError(null);
     setBankLoading(true);
 
     const userId = user._id || user.id;
@@ -215,24 +210,15 @@ export default function App() {
       if (res.ok) {
         const bankData = await res.json();
         setSelectedUserBank(bankData);
+      } else if (res.status === 404) {
+        setSelectedUserBank(null);
       } else {
-        setSelectedUserBank(user.bankDetails || {
-          accountHolderName: user.name,
-          bankName: 'HDFC Bank',
-          accountNumber: '4821',
-          ifsc: 'HDFC0001234',
-          upiId: 'taskbit@okhdfcbank'
-        });
+        throw new Error('Could not load saved bank details.');
       }
     } catch (err) {
       console.warn('Could not fetch bank details from backend:', err);
-      setSelectedUserBank(user.bankDetails || {
-        accountHolderName: user.name,
-        bankName: 'HDFC Bank',
-        accountNumber: '4821',
-        ifsc: 'HDFC0001234',
-        upiId: 'taskbit@okhdfcbank'
-      });
+      setSelectedUserBank(null);
+      setBankError(err.message || 'Could not load saved bank details.');
     } finally {
       setBankLoading(false);
     }
@@ -249,17 +235,15 @@ export default function App() {
         body: JSON.stringify({ status: action === 'approve' ? 'approved' : 'rejected' })
       });
 
-      if (res.ok) {
-        setWithdrawals(prev => prev.map(w => (w._id === id || w.id === id) ? { ...w, status: newStatus } : w));
-        showToast(`Withdrawal request ${newStatus.toLowerCase()} successfully.`, 'success');
-      } else {
-        setWithdrawals(prev => prev.map(w => (w._id === id || w.id === id) ? { ...w, status: newStatus } : w));
-        showToast(`Withdrawal request ${newStatus.toLowerCase()} successfully.`, 'success');
+      if (!res.ok) {
+        const result = await res.json().catch(() => null);
+        throw new Error(result?.error || 'The backend rejected this status update.');
       }
+      setWithdrawals(prev => prev.map(w => (w._id === id || w.id === id) ? { ...w, status: newStatus.toLowerCase() } : w));
+      showToast(`Withdrawal request ${newStatus.toLowerCase()} successfully.`, 'success');
     } catch (err) {
       console.warn('Failed to update withdrawal status on backend:', err);
-      setWithdrawals(prev => prev.map(w => (w._id === id || w.id === id) ? { ...w, status: newStatus } : w));
-      showToast(`Withdrawal request ${newStatus.toLowerCase()} successfully.`, 'success');
+      showToast(`Could not update withdrawal request: ${err.message || 'Check the backend connection and try again.'}`, 'error');
     } finally {
       setConfirmDialog({ isOpen: false, id: null, action: null, userName: '' });
     }
@@ -332,7 +316,7 @@ export default function App() {
 
   // Helper to mask account number securely
   const maskAccountNumber = (accNum) => {
-    if (!accNum || accNum === 'N/A') return '••••-****-4821';
+    if (!accNum || accNum === 'N/A') return 'Not provided';
     const clean = accNum.toString();
     if (clean.length <= 4) return '••••-' + clean;
     return '••••-****-' + clean.slice(-4);
@@ -340,7 +324,6 @@ export default function App() {
 
   // Computed Metrics
   const totalUsers = users.length;
-  const activeUsers = users.filter(u => (u.status || 'Active') === 'Active').length;
   const totalPoints = users.reduce((acc, u) => acc + (u.points || 0), 0);
   const totalBalance = users.reduce((acc, u) => acc + (u.balance || 0), 0);
   const totalEarnings = users.reduce((acc, u) => acc + (u.totalEarned || 0), 0);
@@ -353,8 +336,7 @@ export default function App() {
   const filteredUsers = users.filter(u => {
     const matchesSearch = (u.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                           (u.email || '').toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'All' || (u.status || 'Active') === statusFilter;
-    return matchesSearch && matchesStatus;
+    return matchesSearch;
   });
 
   // Filtered withdrawals
@@ -527,7 +509,7 @@ export default function App() {
               {/* Metric Cards with TaskBit Theme Gradients */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
 
-                <StatCard label="Total users" value={totalUsers.toLocaleString()} note={`${activeUsers} active accounts`} icon={Users} tone="blue" />
+                <StatCard label="Total users" value={totalUsers.toLocaleString()} note="Registered accounts" icon={Users} tone="blue" />
 
                 <StatCard label="Points in circulation" value={totalPoints.toLocaleString()} note="Current user point balances" icon={Award} tone="cyan" />
 
@@ -536,7 +518,7 @@ export default function App() {
                     <p className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Total Balance</p>
                     <h3 className="text-3xl font-black text-slate-900 mt-1">₹{totalBalance.toFixed(2)}</h3>
                     <span className="text-xs font-bold text-emerald-600 flex items-center gap-1 mt-1">
-                      <DollarSign size={14} /> Active pool
+                      <DollarSign size={14} /> Current user balances
                     </span>
                   </div>
                   <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center shadow-xs group-hover:scale-105 transition">
@@ -549,7 +531,7 @@ export default function App() {
                     <p className="text-xs font-extrabold uppercase tracking-wider text-slate-400">Total Earnings</p>
                     <h3 className="text-3xl font-black text-slate-900 mt-1">₹{totalEarnings.toFixed(2)}</h3>
                     <span className="text-xs font-bold text-blue-600 flex items-center gap-1 mt-1">
-                      <TrendingUp size={14} /> Platform revenue
+                      <TrendingUp size={14} /> Total user earnings
                     </span>
                   </div>
                   <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-xs group-hover:scale-105 transition">
@@ -633,7 +615,7 @@ export default function App() {
                             <td className="py-3 px-3 font-semibold text-amber-600">{u.points || 0} pts</td>
                             <td className="py-3 px-3 font-semibold text-emerald-600">₹{(u.balance || 0).toFixed(2)}</td>
                             <td className="py-3 px-3">
-                              <StatusBadge status={u.status || 'Active'} />
+                              <StatusBadge status={u.status || 'Not tracked'} />
                             </td>
                           </tr>
                         ))}
@@ -697,15 +679,6 @@ export default function App() {
                       className="pl-10 pr-4 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm w-full sm:w-64"
                     />
                   </div>
-                  <select
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                    className="px-3 py-2 rounded-xl border border-slate-300 text-sm outline-none bg-white font-bold text-slate-700"
-                  >
-                    <option value="All">All Status</option>
-                    <option value="Active">Active</option>
-                    <option value="Inactive">Inactive</option>
-                  </select>
                 </div>
               </div>
 
@@ -741,7 +714,7 @@ export default function App() {
                           <td className="py-4 px-4 font-semibold text-slate-700">₹{(u.totalWithdrawn || 0).toFixed(2)}</td>
                           <td className="py-4 px-4 text-slate-500 text-xs">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : 'N/A'}</td>
                           <td className="py-4 px-4">
-                            <StatusBadge status={u.status || 'Active'} />
+                            <StatusBadge status={u.status || 'Not tracked'} />
                           </td>
                           <td className="py-4 px-4 text-center">
                             <button
@@ -809,7 +782,7 @@ export default function App() {
                             <div className="font-bold text-slate-800">{w.method}</div>
                             <div className="font-mono text-slate-400">{w.accountMasked || '••••-****-1234'}</div>
                           </td>
-                          <td className="py-4 px-4 text-slate-500 text-xs">{w.date || new Date(w.createdAt || Date.now()).toLocaleString()}</td>
+                          <td className="py-4 px-4 text-slate-500 text-xs">{w.date || (w.createdAt ? new Date(w.createdAt).toLocaleString() : '—')}</td>
                           <td className="py-4 px-4">
                             <StatusBadge status={w.status} />
                           </td>
@@ -967,26 +940,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-sm">
-                    {transactions.length > 0 ? transactions.map(tx => (
-                      <tr key={tx.id} className="hover:bg-slate-50 transition">
-                        <td className="py-4 px-4 font-mono font-bold text-slate-800 text-xs">{tx.id}</td>
-                        <td className="py-4 px-4 font-bold text-slate-900">{tx.userName}</td>
-                        <td className="py-4 px-4">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${
-                            tx.type === 'Credit' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
-                          }`}>
-                            {tx.type === 'Credit' ? <ArrowDownLeft size={12} /> : <ArrowUpRight size={12} />}
-                            {tx.type}
-                          </span>
-                        </td>
-                        <td className="py-4 px-4 font-black text-slate-900">{tx.amount}</td>
-                        <td className="py-4 px-4 font-bold text-amber-600">{tx.points}</td>
-                        <td className="py-4 px-4 text-slate-500 text-xs">{tx.date}</td>
-                        <td className="py-4 px-4">
-                          <StatusBadge status={tx.status} />
-                        </td>
-                      </tr>
-                    )) : <tr><td colSpan="7"><StatePanel title="No transactions to show" description="Transaction activity will appear here when available." icon={ArrowLeftRight} /></td></tr>}
+                    <tr><td colSpan="7"><StatePanel title="No transactions to show" description="Transaction history is not currently provided by the backend." icon={ArrowLeftRight} /></td></tr>
                   </tbody>
                 </table>
               </div>
@@ -1005,16 +959,11 @@ export default function App() {
                     <div>
                       <h4 className="font-bold text-slate-900 text-sm">{u.name}</h4>
                       <p className="text-xs text-slate-500 mt-0.5">{u.email}</p>
-                      <div className="mt-3 flex flex-wrap gap-4 text-xs font-bold text-slate-700">
-                        <div><span className="text-slate-400 font-medium">Bank:</span> {u.bankDetails?.bankName || 'HDFC Bank'}</div>
-                        <div><span className="text-slate-400 font-medium">A/C:</span> <span className="font-mono text-slate-900">{maskAccountNumber(u.bankDetails?.accountNumber || '4821')}</span></div>
-                        <div><span className="text-slate-400 font-medium">IFSC:</span> <span className="font-mono">{u.bankDetails?.ifsc || 'HDFC0001234'}</span></div>
-                        <div><span className="text-slate-400 font-medium">UPI:</span> <span className="font-mono">{u.bankDetails?.upiId || 'taskbit@okhdfcbank'}</span></div>
-                      </div>
+                      <p className="mt-3 text-xs text-slate-500">Open user details to load saved payout information.</p>
                     </div>
-                    <span className="px-3 py-1 bg-blue-100 text-blue-800 font-bold text-xs rounded-xl self-start sm:self-center shadow-xs">
-                      Secure Masked
-                    </span>
+                    <button onClick={() => handleViewUser(u)} className="px-3 py-2 bg-blue-50 text-blue-700 font-bold text-xs rounded-xl self-start sm:self-center hover:bg-blue-100">
+                      View secure details
+                    </button>
                   </div>
                 )) : <StatePanel title="No user records available" description="Users with payout information will appear here." icon={CreditCard} />}
               </div>
@@ -1029,16 +978,7 @@ export default function App() {
 
               <div className="space-y-6">
                 <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
-                  <h4 className="text-sm font-bold text-slate-900">Profile Information</h4>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Display Name</label>
-                    <input
-                      type="text"
-                      value={adminProfile.name}
-                      onChange={(e) => setAdminProfile({ ...adminProfile, name: e.target.value })}
-                      className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-white font-medium"
-                    />
-                  </div>
+                  <h4 className="text-sm font-bold text-slate-900">Admin account</h4>
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Email Address</label>
                     <input
@@ -1048,12 +988,7 @@ export default function App() {
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-white font-medium"
                     />
                   </div>
-                  <button
-                    onClick={() => showToast('Admin profile updated successfully!', 'success')}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs"
-                  >
-                    Save Changes
-                  </button>
+                  <p className="text-xs text-slate-500">Profile editing is not available. This email comes from the authenticated admin session.</p>
                 </div>
 
                 <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
@@ -1168,11 +1103,11 @@ export default function App() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                     <div>
                       <span className="text-xs text-slate-400 block font-medium">Account Holder</span>
-                      <span className="font-bold text-slate-800">{selectedUserBank.accountHolderName || selectedUser.name}</span>
+                      <span className="font-bold text-slate-800">{selectedUserBank.accountHolderName || 'Not provided'}</span>
                     </div>
                     <div>
                       <span className="text-xs text-slate-400 block font-medium">Bank Name</span>
-                      <span className="font-bold text-slate-800">{selectedUserBank.bankName || 'HDFC Bank'}</span>
+                      <span className="font-bold text-slate-800">{selectedUserBank.bankName || 'Not provided'}</span>
                     </div>
                     <div>
                       <span className="text-xs text-slate-400 block font-medium">Account Number</span>
@@ -1180,13 +1115,15 @@ export default function App() {
                     </div>
                     <div>
                       <span className="text-xs text-slate-400 block font-medium">IFSC Code</span>
-                      <span className="font-mono font-bold text-slate-900">{selectedUserBank.ifsc || 'HDFC0001234'}</span>
+                      <span className="font-mono font-bold text-slate-900">{selectedUserBank.ifsc || 'Not provided'}</span>
                     </div>
                     <div className="sm:col-span-2">
                       <span className="text-xs text-slate-400 block font-medium">UPI ID</span>
-                      <span className="font-mono font-bold text-slate-900">{selectedUserBank.upiId || 'taskbit@okhdfcbank'}</span>
+                      <span className="font-mono font-bold text-slate-900">{selectedUserBank.upiId || 'Not provided'}</span>
                     </div>
                   </div>
+                ) : bankError ? (
+                  <p className="text-xs text-red-600 py-2">{bankError}</p>
                 ) : (
                   <p className="text-xs text-slate-500 italic">No bank or UPI details linked for this user.</p>
                 )}
@@ -1206,20 +1143,9 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-xs">
-                      {(selectedUser.transactions || []).length > 0 ? (
-                        selectedUser.transactions.map((tx, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50">
-                            <td className="py-2.5 px-3 font-bold text-slate-700">{tx.type || 'Credit'}</td>
-                            <td className="py-2.5 px-3 font-extrabold text-slate-900">{tx.amount || '₹50.00'}</td>
-                            <td className="py-2.5 px-3 font-bold text-amber-600">{tx.points || '+100 Pts'}</td>
-                            <td className="py-2.5 px-3 text-slate-500">{tx.date || '2026-03-30'}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan="4" className="py-6 text-center text-slate-400 italic">No recent transactions found.</td>
-                        </tr>
-                      )}
+                      <tr>
+                        <td colSpan="4" className="py-6 text-center text-slate-400 italic">Transaction history is not currently provided by the backend.</td>
+                      </tr>
                     </tbody>
                   </table>
                 </div>

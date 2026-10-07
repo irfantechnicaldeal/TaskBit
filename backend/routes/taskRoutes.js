@@ -88,7 +88,7 @@ async function getCurrentCycleAfterReconciliation(userId) {
 router.get('/', optionalUserForMobileTaskList, async (req, res) => {
     try {
         const isAdminRoute = req.baseUrl.startsWith('/api/admin/');
-        const tasks = await Task.find(isAdminRoute ? {} : mobileTaskListFilter).sort({ createdAt: -1 });
+        const tasks = await Task.find(isAdminRoute ? {} : mobileTaskListFilter).sort({ taskNumber: 1, createdAt: -1 });
         if (isAdminRoute) return res.json(tasks);
 
         if (!req.user) {

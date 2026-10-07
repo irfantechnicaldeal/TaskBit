@@ -65,6 +65,11 @@
             android:theme="@style/Theme.TaskBit" />
 
         <activity
+            android:name=".TaskPlayerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.TaskBit" />
+
+        <activity
             android:name=".RedeemActivity"
             android:exported="false"
             android:theme="@style/Theme.TaskBit" />

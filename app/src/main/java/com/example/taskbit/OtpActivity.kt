@@ -43,17 +43,7 @@ class OtpActivity : AppCompatActivity() {
             val otp = otpEditText.text.toString().trim()
 
             if (otp == "1234") {
-                val prefs = getSharedPreferences("TaskBitAuth", MODE_PRIVATE)
-                // SECURE: Do NOT store raw plaintext password in SharedPreferences.
-                prefs.edit().apply {
-                    putString("name", name)
-                    putString("mobile", mobile)
-                    putBoolean("isLoggedIn", true)
-                    putString("logged_in_mobile", mobile)
-                    apply()
-                }
-
-                // Register user securely to backend /api/auth/register endpoint (password is hashed on server via bcryptjs)
+                verifyOtpButton.isEnabled = false
                 val authRequest = AuthRequest(
                     name = name,
                     email = "$mobile@taskbit.com",
@@ -62,24 +52,42 @@ class OtpActivity : AppCompatActivity() {
                 )
                 RetrofitClient.apiService.register(authRequest).enqueue(object : Callback<AuthResponse> {
                     override fun onResponse(call: Call<AuthResponse>, response: Response<AuthResponse>) {
-                        if (response.isSuccessful && response.body() != null) {
-                            val authResp = response.body()!!
-                            val editor = prefs.edit().putString("auth_token", authResp.token ?: "")
+                        val authResp = response.body()
+                        if (response.isSuccessful && authResp != null && !authResp.token.isNullOrBlank()) {
+                            val prefs = getSharedPreferences("TaskBitAuth", MODE_PRIVATE)
+                            val editor = prefs.edit()
+                                .putString("name", name)
+                                .putString("mobile", mobile)
+                                .putBoolean("isLoggedIn", true)
+                                .putString("logged_in_mobile", mobile)
+                                .putString("auth_token", authResp.token)
                             authResp.user?.id?.let { userId -> editor.putString("user_id", userId) }
                             editor.apply()
+
+                            Toast.makeText(this@OtpActivity, "Account created successfully!", Toast.LENGTH_LONG).show()
+                            val intent = Intent(this@OtpActivity, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                            }
+                            startActivity(intent)
+                            finish()
+                        } else {
+                            verifyOtpButton.isEnabled = true
+                            Toast.makeText(
+                                this@OtpActivity,
+                                "Account create nahi hua (server error ${response.code()}). Render settings check karein.",
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
                     }
                     override fun onFailure(call: Call<AuthResponse>, t: Throwable) {
-                        // Network failure handling
+                        verifyOtpButton.isEnabled = true
+                        Toast.makeText(
+                            this@OtpActivity,
+                            "Server se connect nahi hua. Internet check karke dobara try karein.",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
                 })
-
-                Toast.makeText(this, "Registration & OTP verification successful!", Toast.LENGTH_LONG).show()
-                val intent = Intent(this, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                }
-                startActivity(intent)
-                finish()
             } else {
                 Toast.makeText(this, "Invalid OTP! Use dummy OTP 1234", Toast.LENGTH_LONG).show()
             }
