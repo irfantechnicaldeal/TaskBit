@@ -1,6 +1,11 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const User = require('../models/User');
+const Withdrawal = require('../models/Withdrawal');
+const BankDetails = require('../models/BankDetails');
+const TaskCompletion = require('../models/TaskCompletion');
+const TaskSession = require('../models/TaskSession');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { requireUser } = require('../middleware/requireUser');
 
@@ -84,6 +89,43 @@ router.put('/:id/points', requireAdmin, async (req, res) => {
         res.json(updatedUser);
     } catch (err) {
         res.status(400).json({ error: err.message });
+    }
+});
+
+// DELETE /api/users/:id - Permanently remove a user and their user-specific data (Admin only)
+// Financial-history guard (Policy A): a user with any APPROVED (paid) withdrawal is NOT
+// deleted, so paid financial records can never be lost. Users with no paid history are
+// fully removed. Every delete is scoped to this userId, so other users and the global
+// tasks/admins collections are never affected.
+router.delete('/:id', requireAdmin, async (req, res) => {
+    try {
+        if (!mongoose.isValidObjectId(req.params.id)) {
+            return res.status(400).json({ error: 'Invalid user id' });
+        }
+
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        // Never destroy paid (approved) withdrawal history.
+        const paidCount = await Withdrawal.countDocuments({ userId: user._id, status: 'approved' });
+        if (paidCount > 0) {
+            return res.status(409).json({
+                error: 'This user has paid withdrawal history that must be retained. Resolve or archive it before deleting the account.',
+                paidWithdrawals: paidCount
+            });
+        }
+
+        // Remove the account, coin balance, wallet, and all user-specific data.
+        // Ordered children-first so the User document is removed last.
+        await BankDetails.deleteMany({ userId: user._id });    // payout/bank info
+        await TaskCompletion.deleteMany({ userId: user._id }); // coin-earning ledger
+        await TaskSession.deleteMany({ userId: user._id });    // ephemeral task sessions
+        await Withdrawal.deleteMany({ userId: user._id });     // pending + rejected (no money moved)
+        await User.deleteOne({ _id: user._id });               // account + points + balance
+
+        res.json({ success: true, message: 'User and associated data deleted', deletedUserId: user._id });
+    } catch (err) {
+        res.status(500).json({ error: 'Unable to delete user' });
     }
 });
 
