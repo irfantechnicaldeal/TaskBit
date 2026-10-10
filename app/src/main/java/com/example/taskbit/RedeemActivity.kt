@@ -12,6 +12,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.taskbit.api.BankDetailsModel
+import com.example.taskbit.api.MyWithdrawal
 import com.example.taskbit.api.RetrofitClient
 import com.example.taskbit.api.UserModel
 import com.example.taskbit.api.WithdrawalRequest
@@ -32,6 +33,13 @@ class RedeemActivity : AppCompatActivity() {
     private val confirmedWithdrawals = mutableListOf<RedeemHistoryAdapter.RedeemItem>()
     private var currentCoins = 0.0
     private var profileLoaded = false
+
+    // Duplicate-request prevention: a user may have only one pending withdrawal
+    // at a time (the backend enforces the same rule). While a request is in
+    // flight or already pending, the redeem button stays disabled.
+    private var requestInFlight = false
+    private var hasPendingWithdrawal = false
+    private var inFlightLabel = "Submitting…"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,12 +96,36 @@ class RedeemActivity : AppCompatActivity() {
                 availableCoinsTextView.text = "Coins unavailable"
             }
         })
+
+        // Check for an existing pending withdrawal so the redeem button stays
+        // disabled while one is awaiting processing (prevents a second request).
+        RetrofitClient.apiService.getMyWithdrawals().enqueue(object : Callback<List<MyWithdrawal>> {
+            override fun onResponse(call: Call<List<MyWithdrawal>>, response: Response<List<MyWithdrawal>>) {
+                val history = response.body()
+                hasPendingWithdrawal = history?.any {
+                    it.status.equals("pending", ignoreCase = true) && it.archived != true
+                } == true
+                updateRedeemButtonState()
+            }
+
+            override fun onFailure(call: Call<List<MyWithdrawal>>, t: Throwable) {
+                hasPendingWithdrawal = false
+                updateRedeemButtonState()
+            }
+        })
     }
 
     private fun requestWithdrawal() {
+        if (requestInFlight) return
+
         val userId = UserSession.getLoggedInUserId(this)
         if (userId.isNullOrBlank()) {
             Toast.makeText(this, "Please sign in again before requesting a withdrawal", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        if (hasPendingWithdrawal) {
+            Toast.makeText(this, "You already have a pending withdrawal request. Please wait for it to be processed.", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -165,6 +197,8 @@ class RedeemActivity : AppCompatActivity() {
                 setRequesting(false)
                 val withdrawal = response.body()
                 if (response.code() == 201 && withdrawal != null && !withdrawal.id.isNullOrBlank()) {
+                    hasPendingWithdrawal = true
+                    updateRedeemButtonState()
                     confirmedWithdrawals.add(
                         0,
                         RedeemHistoryAdapter.RedeemItem(
@@ -174,8 +208,13 @@ class RedeemActivity : AppCompatActivity() {
                         )
                     )
                     renderHistory()
-                    Toast.makeText(this@RedeemActivity, "Withdrawal request submitted", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@RedeemActivity, WITHDRAWAL_SUCCESS_MESSAGE, Toast.LENGTH_LONG).show()
                 } else {
+                    if (response.code() == 409) {
+                        // A pending request already exists: reflect that in the UI.
+                        hasPendingWithdrawal = true
+                        updateRedeemButtonState()
+                    }
                     val detail = response.errorBody()?.string()?.let(::extractErrorMessage)
                     val message = detail ?: "Withdrawal request was not created (HTTP ${response.code()})."
                     Toast.makeText(this@RedeemActivity, message, Toast.LENGTH_LONG).show()
@@ -195,9 +234,29 @@ class RedeemActivity : AppCompatActivity() {
         null
     }
 
-    private fun setRequesting(requesting: Boolean, label: String = "Redeem Now") {
-        requestRedeemButton.isEnabled = !requesting
-        requestRedeemButton.text = if (requesting) label else "Redeem Now"
+    private fun setRequesting(requesting: Boolean, label: String = "Submitting…") {
+        requestInFlight = requesting
+        if (requesting) inFlightLabel = label
+        updateRedeemButtonState()
+    }
+
+    // Single source of truth for the redeem button state: disabled while a
+    // request is in flight or while a pending withdrawal is awaiting processing.
+    private fun updateRedeemButtonState() {
+        when {
+            requestInFlight -> {
+                requestRedeemButton.isEnabled = false
+                requestRedeemButton.text = inFlightLabel
+            }
+            hasPendingWithdrawal -> {
+                requestRedeemButton.isEnabled = false
+                requestRedeemButton.text = "Withdrawal Pending…"
+            }
+            else -> {
+                requestRedeemButton.isEnabled = true
+                requestRedeemButton.text = "Redeem Now"
+            }
+        }
     }
 
     private fun renderHistory() {
@@ -216,5 +275,8 @@ class RedeemActivity : AppCompatActivity() {
         const val WITHDRAWAL_AMOUNT_RUPEES = 10
         const val METHOD_UPI = "UPI"
         const val METHOD_BANK_TRANSFER = "Bank Transfer"
+        const val WITHDRAWAL_SUCCESS_MESSAGE =
+            "Withdrawal request submitted successfully! Your payment is expected within 24 hours. " +
+                "Please wait while we process your request. You can check your withdrawal status in Withdrawal History."
     }
 }

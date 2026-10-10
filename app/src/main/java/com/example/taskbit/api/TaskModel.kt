@@ -13,5 +13,7 @@ data class TaskModel(
     val points: Int? = null,
     val taskNumber: Int? = null,
     val status: String? = null,
-    val cycle: Int? = null
+    val cycle: Int? = null,
+    // Coins credited on completion, configured per task by the admin.
+    val coinReward: Double? = null
 )

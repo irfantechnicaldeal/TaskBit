@@ -285,7 +285,7 @@ class YouTubeOverlayService : Service() {
             if (view != null) {
                 val backToAppButton = view.findViewById<Button>(R.id.backToAppButton)
                 backToAppButton.isEnabled = true
-                backToAppButton.text = "Login to Collect 0.5 Coin"
+                backToAppButton.text = "Login to Collect Your Coin Reward"
                 backToAppButton.setOnClickListener {
                     val intent = Intent(this, LoginActivity::class.java).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
@@ -294,7 +294,7 @@ class YouTubeOverlayService : Service() {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }
-                view.findViewById<TextView>(R.id.overlayMessageTextView).text = "Watch complete! Log in to claim your 0.5 coin reward."
+                view.findViewById<TextView>(R.id.overlayMessageTextView).text = "Watch complete! Log in to claim your coin reward."
             }
             return
         }

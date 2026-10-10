@@ -52,4 +52,7 @@ interface ApiService {
 
     @POST("withdrawals")
     fun createWithdrawal(@Body request: WithdrawalRequest): Call<WithdrawalResponse>
+
+    @GET("withdrawals/mine")
+    fun getMyWithdrawals(): Call<List<MyWithdrawal>>
 }

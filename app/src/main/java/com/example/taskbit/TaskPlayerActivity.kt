@@ -146,7 +146,7 @@ class TaskPlayerActivity : AppCompatActivity() {
 
                 val isLoggedIn = UserSession.isUserLoggedIn(this@TaskPlayerActivity)
                 if (!isLoggedIn) {
-                    messageTextView.text = "Watch complete! Log in to claim your 0.5 coin reward."
+                    messageTextView.text = "Watch complete! Log in to claim your coin reward."
                     finishTaskButton.text = "Login to Claim"
                     finishTaskButton.visibility = View.VISIBLE
                     finishTaskButton.setOnClickListener {
