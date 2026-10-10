@@ -74,6 +74,7 @@ export default function App() {
   // App data state (backend is the only source of truth)
   const [users, setUsers] = useState([]);
   const [withdrawals, setWithdrawals] = useState([]);
+  const [archivedWithdrawals, setArchivedWithdrawals] = useState([]);
   const [tasks, setTasks] = useState([]);
 
   // Loading & error state
@@ -89,9 +90,14 @@ export default function App() {
   const [bankLoading, setBankLoading] = useState(false);
   const [bankError, setBankError] = useState(null);
 
+  // Withdrawal full-details modal state (bank/UPI record linked to the same user)
+  const [detailsWithdrawal, setDetailsWithdrawal] = useState(null);
+  const [detailsBank, setDetailsBank] = useState(null);
+  const [detailsBankLoading, setDetailsBankLoading] = useState(false);
+
   // Task modal state (Add / Edit)
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
-  const [currentTask, setCurrentTask] = useState({ id: '', title: '', description: '', youtubeUrl: '', points: 50, status: 'Active' });
+  const [currentTask, setCurrentTask] = useState({ id: '', title: '', description: '', youtubeUrl: '', coinReward: 0.5, status: 'Active' });
   const [isEditingTask, setIsEditingTask] = useState(false);
 
   // Withdrawal confirmation dialog state
@@ -123,7 +129,7 @@ export default function App() {
     try {
       const [usersRes, withdrawalsRes, tasksRes] = await Promise.all([
         adminFetch('users'),
-        adminFetch('withdrawals'),
+        adminFetch('withdrawals?includeArchived=true'),
         adminFetch('tasks')
       ]);
 
@@ -135,8 +141,12 @@ export default function App() {
       const withdrawalsData = await withdrawalsRes.json();
       const tasksData = await tasksRes.json();
 
+      // Archived (soft-deleted) rows are kept separate so the default views
+      // stay unchanged; they are only shown in the Archived tab.
+      const allWithdrawals = Array.isArray(withdrawalsData) ? withdrawalsData : [];
       setUsers(usersData);
-      setWithdrawals(withdrawalsData);
+      setWithdrawals(allWithdrawals.filter(w => !w.archived));
+      setArchivedWithdrawals(allWithdrawals.filter(w => w.archived));
       setTasks(tasksData);
       setBackendError(null);
     } catch (err) {
@@ -144,6 +154,7 @@ export default function App() {
       setBackendError('Could not load admin data from the backend. Check the connection and retry.');
       setUsers([]);
       setWithdrawals([]);
+      setArchivedWithdrawals([]);
       setTasks([]);
     } finally {
       setLoading(false);
@@ -224,6 +235,31 @@ export default function App() {
     }
   };
 
+  // Open the full details for a withdrawal request (admin only). Payout details
+  // come from the same user's linked bank record via the admin-authenticated
+  // endpoint; missing values are shown as "Not provided", never guessed.
+  const handleViewWithdrawalDetails = async (withdrawal) => {
+    const userId = withdrawal.userId?._id || withdrawal.userId?.id || withdrawal.userId;
+    setDetailsWithdrawal(withdrawal);
+    setDetailsBank(null);
+    setDetailsBankLoading(true);
+    try {
+      const res = await adminFetch(`bank-details/${userId}`);
+      if (res.ok) {
+        setDetailsBank(await res.json());
+      } else if (res.status === 404) {
+        setDetailsBank(null);
+      } else {
+        throw new Error('Could not load payout details.');
+      }
+    } catch (err) {
+      console.warn('Could not fetch payout details from backend:', err);
+      setDetailsBank(null);
+    } finally {
+      setDetailsBankLoading(false);
+    }
+  };
+
   // Handle Withdrawal Status Update (Approve / Reject)
   const executeWithdrawalAction = async () => {
     const { id, action } = confirmDialog;
@@ -253,11 +289,19 @@ export default function App() {
   const handleSaveTask = async (e) => {
     e.preventDefault();
     const taskId = currentTask._id || currentTask.id;
+    const coinRewardInput = currentTask.coinReward;
+    const coinReward = Number(coinRewardInput);
+    if (coinRewardInput === '' || coinRewardInput === null || coinRewardInput === undefined ||
+        !Number.isFinite(coinReward) || coinReward < 0 || coinReward > 1000 ||
+        Math.abs(coinReward * 2 - Math.round(coinReward * 2)) > 1e-9) {
+      showToast('Coin reward must be between 0 and 1000 coins in 0.5 increments.', 'error');
+      return;
+    }
     const taskPayload = {
       title: currentTask.title || currentTask.name,
       description: currentTask.description?.trim() || '',
       youtubeUrl: currentTask.youtubeUrl?.trim() || '',
-      points: currentTask.points,
+      coinReward,
       status: currentTask.status,
       ...(currentTask.taskNumber ? { taskNumber: currentTask.taskNumber } : {})
     };
@@ -291,7 +335,7 @@ export default function App() {
         showToast('New TaskBit task created!', 'success');
       }
       setIsTaskModalOpen(false);
-      setCurrentTask({ id: '', title: '', description: '', youtubeUrl: '', points: 50, status: 'Active' });
+      setCurrentTask({ id: '', title: '', description: '', youtubeUrl: '', coinReward: 0.5, status: 'Active' });
     } catch (err) {
       console.warn('Failed to save task to backend:', err);
       showToast(`Task was not saved: ${err.message || 'Check the backend connection and try again.'}`, 'error');
@@ -314,6 +358,84 @@ export default function App() {
     }
   };
 
+  // Handle User Delete (permanently removes the account, coin balance, wallet,
+  // and user-specific data). The backend refuses deletion when the user has paid
+  // (approved) withdrawal history so financial records are never lost.
+  const handleDeleteUser = async (user) => {
+    const id = user._id || user.id;
+    const maskedId = id ? id.toString().slice(-8) : 'N/A';
+    const contact = user.email || user.phone || user.mobile || 'No email/phone on file';
+    const confirmed = window.confirm(
+      `Permanently delete this user?\n\n` +
+      `Name: ${user.name || 'User'}\n` +
+      `Contact: ${contact}\n` +
+      `User ID: …${maskedId}\n` +
+      `Balance: ₹${(user.balance || 0).toFixed(2)}  •  Points: ${user.points || 0}\n\n` +
+      'This removes the account, coin balance, wallet, bank details, and this user\'s task history.\n' +
+      'Users with paid withdrawal history cannot be deleted.'
+    );
+    if (!confirmed) return;
+    try {
+      const response = await adminFetch(`users/${id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        throw new Error(result?.error || 'User deletion rejected by backend');
+      }
+      setUsers(prev => prev.filter(u => (u._id || u.id) !== id));
+      showToast('User deleted successfully.', 'info');
+    } catch (err) {
+      console.warn('Failed to delete user on backend:', err);
+      showToast(err.message || 'User was not deleted. Check the backend connection and try again.', 'error');
+    }
+  };
+
+  // Handle Withdrawal Archive (soft-delete). Nothing is removed from the
+  // database. The backend refuses to archive approved (paid) records because
+  // they are permanent financial audit records (retention policy).
+  const handleArchiveWithdrawal = async (withdrawal) => {
+    const id = withdrawal._id || withdrawal.id;
+    const userName = withdrawal.userId?.name || withdrawal.userName || 'User';
+    const confirmed = window.confirm(
+      `Archive this withdrawal request?\n\n` +
+      `User: ${userName}\n` +
+      `Amount: ₹${(withdrawal.amount || 0).toFixed(2)}  •  Method: ${withdrawal.method || 'N/A'}\n\n` +
+      'Archived requests are hidden from the default list but are NOT deleted — restore them anytime from the Archived tab.\n' +
+      'Approved (paid) records are financial audit records and cannot be archived or deleted.'
+    );
+    if (!confirmed) return;
+    try {
+      const res = await adminFetch(`withdrawals/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const result = await res.json().catch(() => null);
+        throw new Error(result?.error || 'Archive rejected by backend');
+      }
+      setWithdrawals(prev => prev.filter(w => (w._id || w.id) !== id));
+      setArchivedWithdrawals(prev => [{ ...withdrawal, archived: true, archivedAt: new Date().toISOString() }, ...prev]);
+      showToast('Withdrawal request archived. Restore it anytime from the Archived tab.', 'info');
+    } catch (err) {
+      console.warn('Failed to archive withdrawal on backend:', err);
+      showToast(err.message || 'Could not archive withdrawal request. Check the backend connection and try again.', 'error');
+    }
+  };
+
+  // Handle Withdrawal Restore (un-archive)
+  const handleRestoreWithdrawal = async (withdrawal) => {
+    const id = withdrawal._id || withdrawal.id;
+    try {
+      const res = await adminFetch(`withdrawals/${id}/restore`, { method: 'PUT' });
+      if (!res.ok) {
+        const result = await res.json().catch(() => null);
+        throw new Error(result?.error || 'Restore rejected by backend');
+      }
+      setArchivedWithdrawals(prev => prev.filter(w => (w._id || w.id) !== id));
+      setWithdrawals(prev => [{ ...withdrawal, archived: false, archivedAt: null }, ...prev]);
+      showToast('Withdrawal request restored.', 'success');
+    } catch (err) {
+      console.warn('Failed to restore withdrawal on backend:', err);
+      showToast(err.message || 'Could not restore withdrawal request. Check the backend connection and try again.', 'error');
+    }
+  };
+
   // Helper to mask account number securely
   const maskAccountNumber = (accNum) => {
     if (!accNum || accNum === 'N/A') return 'Not provided';
@@ -327,6 +449,7 @@ export default function App() {
   const totalPoints = users.reduce((acc, u) => acc + (u.points || 0), 0);
   const totalBalance = users.reduce((acc, u) => acc + (u.balance || 0), 0);
   const totalEarnings = users.reduce((acc, u) => acc + (u.totalEarned || 0), 0);
+  const activeTasksCount = tasks.filter(t => (t.status || 'Active') === 'Active').length;
 
   const pendingWithdrawalsCount = withdrawals.filter(w => (w.status || '').toLowerCase() === 'pending').length;
   const approvedWithdrawalsCount = withdrawals.filter(w => (w.status || '').toLowerCase() === 'approved').length;
@@ -347,6 +470,10 @@ export default function App() {
     if (withdrawalTab === 'Rejected') return s === 'rejected';
     return true;
   });
+
+  // Archived (soft-deleted) requests are shown in their own tab, restore-only.
+  const isArchivedView = withdrawalTab === 'Archived';
+  const visibleWithdrawals = isArchivedView ? archivedWithdrawals : filteredWithdrawals;
 
   if (authChecking) {
     return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white text-sm font-bold">Checking admin session...</div>;
@@ -541,8 +668,19 @@ export default function App() {
 
               </div>
 
-              {/* Secondary Metric Cards (Withdrawals Status Breakdown) */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+              {/* Secondary Metric Cards (Tasks & Withdrawals Status Breakdown) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200/80 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Reward Tasks</p>
+                    <h4 className="text-2xl font-black text-blue-600 mt-1">{tasks.length}</h4>
+                    <p className="text-[11px] text-slate-400 font-semibold mt-1">{activeTasksCount} active</p>
+                  </div>
+                  <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center">
+                    <CheckSquare size={22} />
+                  </div>
+                </div>
+
                 <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200/80 flex items-center justify-between">
                   <div>
                     <p className="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Pending Withdrawals</p>
@@ -717,12 +855,21 @@ export default function App() {
                             <StatusBadge status={u.status || 'Not tracked'} />
                           </td>
                           <td className="py-4 px-4 text-center">
-                            <button
-                              onClick={() => handleViewUser(u)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-xl text-xs font-bold transition shadow-xs"
-                            >
-                              <Eye size={14} /> View User
-                            </button>
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                onClick={() => handleViewUser(u)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-xl text-xs font-bold transition shadow-xs"
+                              >
+                                <Eye size={14} /> View User
+                              </button>
+                              <button
+                                onClick={() => handleDeleteUser(u)}
+                                className="p-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-xl transition shadow-xs"
+                                title="Delete User"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -738,15 +885,15 @@ export default function App() {
           )}
 
           {/* 3. WITHDRAWALS TAB */}
-          {currentTab === 'withdrawals' && (!loading || withdrawals.length > 0) && (
+          {currentTab === 'withdrawals' && (!loading || withdrawals.length > 0 || archivedWithdrawals.length > 0) && (
             <div className="bg-white rounded-2xl shadow-xs border border-slate-200/80 overflow-hidden">
               <div className="p-6 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">Withdrawal Requests</h3>
-                  <p className="text-xs text-slate-500">Review payout requests and approve or reject them</p>
+                  <h3 className="text-lg font-bold text-slate-900">{withdrawalTab === 'Archived' ? 'Archived Withdrawal Requests' : 'Withdrawal Requests'}</h3>
+                  <p className="text-xs text-slate-500">{withdrawalTab === 'Archived' ? 'Archived requests are hidden from active views and can be restored' : 'Review payout requests and approve or reject them'}</p>
                 </div>
                 <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-                  {['All', 'Pending', 'Approved', 'Rejected'].map(tab => (
+                  {['All', 'Pending', 'Approved', 'Rejected', 'Archived'].map(tab => (
                     <button
                       key={tab}
                       onClick={() => setWithdrawalTab(tab)}
@@ -772,8 +919,8 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-sm">
-                    {filteredWithdrawals.length > 0 ? (
-                      filteredWithdrawals.map(w => (
+                    {visibleWithdrawals.length > 0 ? (
+                      visibleWithdrawals.map(w => (
                         <tr key={w._id || w.id} className="hover:bg-slate-50 transition">
                           <td className="py-4 px-4 font-mono font-bold text-slate-800 text-xs">{(w._id || w.id).toString().slice(-8)}</td>
                           <td className="py-4 px-4 font-bold text-slate-900">{w.userId?.name || w.userName || 'User'}</td>
@@ -784,33 +931,70 @@ export default function App() {
                           </td>
                           <td className="py-4 px-4 text-slate-500 text-xs">{w.date || (w.createdAt ? new Date(w.createdAt).toLocaleString() : '—')}</td>
                           <td className="py-4 px-4">
-                            <StatusBadge status={w.status} />
+                            <StatusBadge status={isArchivedView ? 'Archived' : w.status} />
                           </td>
                           <td className="py-4 px-4 text-center">
-                            {(w.status || '').toLowerCase() === 'pending' ? (
-                              <div className="flex items-center justify-center gap-2">
+                            <div className="flex items-center justify-center gap-2 flex-wrap">
+                              <button
+                                onClick={() => handleViewWithdrawalDetails(w)}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-xl text-xs font-bold transition shadow-xs"
+                                title="View full withdrawal details"
+                              >
+                                <Eye size={14} /> View Full Details
+                              </button>
+                              {isArchivedView ? (
                                 <button
-                                  onClick={() => setConfirmDialog({ isOpen: true, id: w._id || w.id, action: 'approve', userName: w.userId?.name || w.userName || 'User' })}
-                                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition"
+                                  onClick={() => handleRestoreWithdrawal(w)}
+                                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-xl text-xs font-bold transition shadow-xs"
+                                  title="Restore withdrawal request"
                                 >
-                                  <CheckCircle size={14} /> Approve
+                                  <RefreshCw size={14} /> Restore
                                 </button>
+                              ) : (w.status || '').toLowerCase() === 'pending' ? (
+                                <>
+                                  <button
+                                    onClick={() => setConfirmDialog({ isOpen: true, id: w._id || w.id, action: 'approve', userName: w.userId?.name || w.userName || 'User' })}
+                                    className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition"
+                                  >
+                                    <CheckCircle size={14} /> Approve
+                                  </button>
+                                  <button
+                                    onClick={() => setConfirmDialog({ isOpen: true, id: w._id || w.id, action: 'reject', userName: w.userId?.name || w.userName || 'User' })}
+                                    className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-xs transition"
+                                  >
+                                    <XCircle size={14} /> Reject
+                                  </button>
+                                  <button
+                                    onClick={() => handleArchiveWithdrawal(w)}
+                                    className="p-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-xl transition shadow-xs"
+                                    title="Archive withdrawal request"
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                </>
+                              ) : (w.status || '').toLowerCase() === 'approved' ? (
+                                <span
+                                  className="p-2 bg-slate-100 text-slate-400 rounded-xl"
+                                  title="Approved (paid) records are financial audit records and cannot be deleted (retention policy)."
+                                >
+                                  <Lock size={16} />
+                                </span>
+                              ) : (
                                 <button
-                                  onClick={() => setConfirmDialog({ isOpen: true, id: w._id || w.id, action: 'reject', userName: w.userId?.name || w.userName || 'User' })}
-                                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-xs transition"
+                                  onClick={() => handleArchiveWithdrawal(w)}
+                                  className="p-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-xl transition shadow-xs"
+                                  title="Archive withdrawal request"
                                 >
-                                  <XCircle size={14} /> Reject
+                                  <Trash2 size={16} />
                                 </button>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-slate-400 font-semibold italic">Processed</span>
-                            )}
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan="7"><StatePanel title="No requests in this view" description="Change the status filter or check back when requests arrive." icon={Wallet} /></td>
+                        <td colSpan="7"><StatePanel title={isArchivedView ? 'No archived requests' : 'No requests in this view'} description={isArchivedView ? 'Withdrawal requests you archive will appear here and can be restored.' : 'Change the status filter or check back when requests arrive.'} icon={Wallet} /></td>
                       </tr>
                     )}
                   </tbody>
@@ -829,7 +1013,7 @@ export default function App() {
                 </div>
                 <button
                   onClick={() => {
-                    setCurrentTask({ id: '', title: '', description: '', youtubeUrl: '', points: 50, status: 'Active' });
+                    setCurrentTask({ id: '', title: '', description: '', youtubeUrl: '', coinReward: 0.5, status: 'Active' });
                     setIsEditingTask(false);
                     setIsTaskModalOpen(true);
                   }}
@@ -847,7 +1031,7 @@ export default function App() {
                       <th className="py-3 px-4">Task Number</th>
                       <th className="py-3 px-4">Task Title</th>
                       <th className="py-3 px-4">Description</th>
-                      <th className="py-3 px-4">Admin Points</th>
+                      <th className="py-3 px-4">Coin Reward</th>
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4">Created Date</th>
                       <th className="py-3 px-4 text-center">Actions</th>
@@ -873,7 +1057,7 @@ export default function App() {
                           </td>
                           <td className="py-4 px-4 font-bold text-slate-900">{t.title || t.name}</td>
                           <td className="py-4 px-4 text-slate-600 max-w-xs truncate text-xs">{t.description}</td>
-                          <td className="py-4 px-4 font-extrabold text-amber-600">{t.points ?? 0} pts</td>
+                          <td className="py-4 px-4 font-extrabold text-emerald-600">{Number.isFinite(t.coinReward) ? `${t.coinReward} coins` : '0.5 coins'}</td>
                           <td className="py-4 px-4">
                             <StatusBadge status={t.status || (t.completed ? 'Completed' : 'Active')} />
                           </td>
@@ -886,7 +1070,8 @@ export default function App() {
                                     ...t,
                                     title: t.title || t.name,
                                     description: t.description || '',
-                                    youtubeUrl: t.youtubeUrl || ''
+                                    youtubeUrl: t.youtubeUrl || '',
+                                    coinReward: typeof t.coinReward === 'number' ? t.coinReward : 0.5
                                   });
                                   setIsEditingTask(true);
                                   setIsTaskModalOpen(true);
@@ -1092,34 +1277,46 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Bank Details Section (Masked account number) */}
+              {/* Payout Details Section: UPI and Bank shown separately */}
               <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
                 <h4 className="text-sm font-bold text-slate-900 mb-3 flex items-center gap-2">
-                  <Wallet size={16} className="text-blue-600" /> Bank & UPI Details (Masked Secure)
+                  <Wallet size={16} className="text-blue-600" /> Payout Details (UPI & Bank)
                 </h4>
                 {bankLoading ? (
-                  <p className="text-xs text-slate-500 py-2 animate-pulse">Loading secure bank details...</p>
+                  <p className="text-xs text-slate-500 py-2 animate-pulse">Loading secure payout details...</p>
                 ) : selectedUserBank ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div className="space-y-4">
                     <div>
-                      <span className="text-xs text-slate-400 block font-medium">Account Holder</span>
-                      <span className="font-bold text-slate-800">{selectedUserBank.accountHolderName || 'Not provided'}</span>
+                      <p className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">UPI</p>
+                      <div className="text-sm">
+                        <span className="text-xs text-slate-400 block font-medium">UPI ID</span>
+                        <span className="font-mono font-bold text-slate-900">{selectedUserBank.upiId || 'Not provided'}</span>
+                      </div>
                     </div>
                     <div>
-                      <span className="text-xs text-slate-400 block font-medium">Bank Name</span>
-                      <span className="font-bold text-slate-800">{selectedUserBank.bankName || 'Not provided'}</span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-slate-400 block font-medium">Account Number</span>
-                      <span className="font-mono font-bold text-slate-900">{maskAccountNumber(selectedUserBank.accountNumber)}</span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-slate-400 block font-medium">IFSC Code</span>
-                      <span className="font-mono font-bold text-slate-900">{selectedUserBank.ifsc || 'Not provided'}</span>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <span className="text-xs text-slate-400 block font-medium">UPI ID</span>
-                      <span className="font-mono font-bold text-slate-900">{selectedUserBank.upiId || 'Not provided'}</span>
+                      <p className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">Bank (masked for security)</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <span className="text-xs text-slate-400 block font-medium">Account Holder</span>
+                          <span className="font-bold text-slate-800">{selectedUserBank.accountHolderName || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block font-medium">Bank Name</span>
+                          <span className="font-bold text-slate-800">{selectedUserBank.bankName || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block font-medium">Account Number</span>
+                          <span className="font-mono font-bold text-slate-900">{maskAccountNumber(selectedUserBank.accountNumber)}</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block font-medium">IFSC Code</span>
+                          <span className="font-mono font-bold text-slate-900">{selectedUserBank.ifsc || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block font-medium">Branch</span>
+                          <span className="font-bold text-slate-800">Not provided</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ) : bankError ? (
@@ -1197,67 +1394,202 @@ export default function App() {
         </div>
       )}
 
-      {/* ADD / EDIT TASK MODAL */}
-      {isTaskModalOpen && (
+      {/* WITHDRAWAL DETAILS MODAL */}
+      {detailsWithdrawal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 border border-slate-100 animate-in fade-in zoom-in duration-200">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-6">
-              <h3 className="text-lg font-black text-slate-900">{isEditingTask ? 'Edit Reward Task' : 'Create New Reward Task'}</h3>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-slate-100 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between gap-3 px-6 py-4 border-b border-slate-200 shrink-0">
+              <h3 className="text-lg font-black text-slate-900">Withdrawal Request Details</h3>
               <button
-                onClick={() => setIsTaskModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-gray-200 text-slate-600 flex items-center justify-center transition"
+                type="button"
+                onClick={() => { setDetailsWithdrawal(null); setDetailsBank(null); }}
+                aria-label="Close dialog"
+                className="w-8 h-8 shrink-0 rounded-full bg-slate-100 hover:bg-gray-200 text-slate-600 flex items-center justify-center transition"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleSaveTask} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Task Title</label>
-                <input
-                  type="text"
-                  value={currentTask.title}
-                  onChange={(e) => setCurrentTask({ ...currentTask, title: e.target.value })}
-                  required
-                  placeholder="e.g. Watch YouTube Video"
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
-                />
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 space-y-6">
+              {/* Request Summary */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                  <p className="text-[11px] text-slate-500 font-extrabold uppercase tracking-wider">Status</p>
+                  <div className="mt-1"><StatusBadge status={detailsWithdrawal.status} /></div>
+                </div>
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                  <p className="text-[11px] text-slate-500 font-extrabold uppercase tracking-wider">Payment Method</p>
+                  <p className="text-sm font-bold text-slate-900 mt-1">{detailsWithdrawal.method || 'Not provided'}</p>
+                </div>
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                  <p className="text-[11px] text-slate-500 font-extrabold uppercase tracking-wider">Requested On</p>
+                  <p className="text-sm font-bold text-slate-900 mt-1">{detailsWithdrawal.createdAt ? new Date(detailsWithdrawal.createdAt).toLocaleString() : 'Not provided'}</p>
+                </div>
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                  <p className="text-[11px] text-slate-500 font-extrabold uppercase tracking-wider">Request ID</p>
+                  <p className="text-sm font-mono font-bold text-slate-900 mt-1 break-all">{detailsWithdrawal._id || detailsWithdrawal.id || 'Not provided'}</p>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Description</label>
-                <textarea
-                  value={currentTask.description}
-                  onChange={(e) => setCurrentTask({ ...currentTask, description: e.target.value })}
-                  rows="3"
-                  placeholder="Task instructions..."
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
-                ></textarea>
+              {/* User Information */}
+              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                <h4 className="text-sm font-bold text-slate-900 mb-3">User Information</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="text-xs text-slate-400 block font-medium">Name</span>
+                    <span className="font-bold text-slate-800">{detailsWithdrawal.userId?.name || 'Not provided'}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-400 block font-medium">User ID</span>
+                    <span className="font-mono font-bold text-slate-800 break-all">{(detailsWithdrawal.userId?._id || detailsWithdrawal.userId || 'Not provided').toString()}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-400 block font-medium">Email</span>
+                    <span className="font-semibold text-slate-800">{detailsWithdrawal.userId?.email || 'Not provided'}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-400 block font-medium">Phone</span>
+                    <span className="font-semibold text-slate-800">{detailsWithdrawal.userId?.phone || 'Not provided'}</span>
+                  </div>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Video URL</label>
-                <input
-                  type="url"
-                  value={currentTask.youtubeUrl || ''}
-                  onChange={(e) => setCurrentTask({ ...currentTask, youtubeUrl: e.target.value })}
-                  required={currentTask.status === 'Active'}
-                  placeholder="https://www.youtube.com/watch?v=..."
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
-                />
+              {/* Payment Calculation (all values from the backend response) */}
+              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                <h4 className="text-sm font-bold text-slate-900 mb-3">Payment Calculation</h4>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <span className="text-xs text-slate-400 block font-medium">User's Coins (Current Balance)</span>
+                    <span className="font-extrabold text-amber-600">{detailsWithdrawal.userId?.points ?? 'Not provided'}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-400 block font-medium">Coins Requested</span>
+                    <span className="font-extrabold text-slate-900">{Number.isFinite(detailsWithdrawal.coinsRequested) ? detailsWithdrawal.coinsRequested.toLocaleString() : 'Not provided'}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-400 block font-medium">Amount Payable</span>
+                    <span className="font-extrabold text-emerald-600">₹{(detailsWithdrawal.amount || 0).toFixed(2)}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-400 block font-medium">Conversion Rate</span>
+                    <span className="font-bold text-slate-800">{detailsWithdrawal.coinsPerRupee ? `${detailsWithdrawal.coinsPerRupee} coins = ₹1` : 'Not provided'}</span>
+                  </div>
+                </div>
+                <p className="mt-3 text-[11px] text-slate-400">Conversion rate and coin amounts are provided by the backend's actual payout settings; the amount payable is the value recorded when the request was created.</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              {/* Payout Details (UPI / Bank from the user's linked record) */}
+              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                <h4 className="text-sm font-bold text-slate-900 mb-3">Payout Details</h4>
+                {detailsBankLoading ? (
+                  <p className="text-xs text-slate-500 py-2 animate-pulse">Loading payout details...</p>
+                ) : detailsBank ? (
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">UPI</p>
+                      <div className="text-sm">
+                        <span className="text-xs text-slate-400 block font-medium">UPI ID</span>
+                        <span className="font-mono font-bold text-slate-900">{detailsBank.upiId || 'Not provided'}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">Bank</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <span className="text-xs text-slate-400 block font-medium">Account Holder Name</span>
+                          <span className="font-bold text-slate-800">{detailsBank.accountHolderName || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block font-medium">Bank Name</span>
+                          <span className="font-bold text-slate-800">{detailsBank.bankName || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block font-medium">Account Number</span>
+                          <span className="font-mono font-bold text-slate-900">{detailsBank.accountNumber || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block font-medium">IFSC Code</span>
+                          <span className="font-mono font-bold text-slate-900">{detailsBank.ifsc || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block font-medium">Branch</span>
+                          <span className="font-bold text-slate-800">{detailsBank.branch || 'Not provided'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 italic">No payout details are on file for this user.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 shrink-0">
+              <button
+                type="button"
+                onClick={() => { setDetailsWithdrawal(null); setDetailsBank(null); }}
+                className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-md"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD / EDIT TASK MODAL */}
+      {isTaskModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col border border-slate-100 animate-in fade-in zoom-in duration-200">
+            {/* Header with close button (always visible, does not scroll) */}
+            <div className="flex items-center justify-between gap-3 px-6 py-4 border-b border-slate-200 shrink-0">
+              <h3 className="text-lg font-black text-slate-900">{isEditingTask ? 'Edit Reward Task' : 'Create New Reward Task'}</h3>
+              <button
+                type="button"
+                onClick={() => setIsTaskModalOpen(false)}
+                aria-label="Close dialog"
+                className="w-8 h-8 shrink-0 rounded-full bg-slate-100 hover:bg-gray-200 text-slate-600 flex items-center justify-center transition"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveTask} className="flex flex-col flex-1 min-h-0">
+              {/* Scrollable content area */}
+              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Admin Task Points</label>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Task Title</label>
                   <input
-                    type="number"
-                    value={currentTask.points}
-                    onChange={(e) => setCurrentTask({ ...currentTask, points: parseInt(e.target.value) || 0 })}
+                    type="text"
+                    value={currentTask.title}
+                    onChange={(e) => setCurrentTask({ ...currentTask, title: e.target.value })}
                     required
+                    placeholder="e.g. Watch YouTube Video"
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
                   />
-                  <p className="mt-1 text-[11px] text-slate-500">User completion reward is fixed at 0.5 coin and does not use this field.</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Description</label>
+                  <textarea
+                    value={currentTask.description}
+                    onChange={(e) => setCurrentTask({ ...currentTask, description: e.target.value })}
+                    rows="3"
+                    placeholder="Task instructions..."
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
+                  ></textarea>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Video URL</label>
+                  <input
+                    type="url"
+                    value={currentTask.youtubeUrl || ''}
+                    onChange={(e) => setCurrentTask({ ...currentTask, youtubeUrl: e.target.value })}
+                    required={currentTask.status === 'Active'}
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
+                  />
                 </div>
 
                 <div>
@@ -1271,9 +1603,25 @@ export default function App() {
                     <option value="Paused">Paused</option>
                   </select>
                 </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Coin Reward per Completion</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    max="1000"
+                    value={Number.isFinite(currentTask.coinReward) ? currentTask.coinReward : 0.5}
+                    onChange={(e) => setCurrentTask({ ...currentTask, coinReward: e.target.value === '' ? '' : parseFloat(e.target.value) })}
+                    required
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
+                  />
+                  <p className="mt-1 text-[11px] text-slate-500">Coins credited to the user's balance when they complete this task (0.5 increments, max 1000).</p>
+                </div>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
+              {/* Sticky footer: actions stay reachable while the content scrolls */}
+              <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsTaskModalOpen(false)}
