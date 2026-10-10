@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { DEFAULT_TASK_COIN_REWARD, isValidCoinReward } = require('../utils/taskReward');
 
 const TaskSchema = new mongoose.Schema({
     title: { type: String, required: true },
@@ -7,6 +8,16 @@ const TaskSchema = new mongoose.Schema({
     youtubeUrl: { type: String, default: '' },
     userId: { type: String, default: '' },
     points: { type: Number, default: 0 },
+    // Coins credited to the user when this task is completed. Configurable per
+    // task from the admin panel; defaults to the legacy 0.5-coin reward.
+    coinReward: {
+        type: Number,
+        default: DEFAULT_TASK_COIN_REWARD,
+        validate: {
+            validator: (value) => isValidCoinReward(value),
+            message: 'Coin reward must be between 0 and 1000 coins in 0.5 increments'
+        }
+    },
     taskNumber: {
         type: Number,
         min: 1,

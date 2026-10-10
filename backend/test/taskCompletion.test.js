@@ -44,6 +44,75 @@ test('invalid JWT is rejected with HTTP 401', async () => {
 });
 
 const testMongoUri = process.env.TASKBIT_TEST_MONGO_URI;
+
+test('task coin reward validation rejects negative, invalid, and out-of-range values', () => {
+    const {
+        DEFAULT_TASK_COIN_REWARD,
+        MAX_TASK_COIN_REWARD,
+        coinsToRupees,
+        isValidCoinReward,
+        normalizeCoinReward,
+        resolveTaskCoinReward,
+        rewardUnitsFromCoins
+    } = require('../utils/taskReward');
+
+    // The legacy default is preserved.
+    assert.equal(DEFAULT_TASK_COIN_REWARD, 0.5);
+
+    // Valid rewards are non-negative half-coin increments up to the cap.
+    assert.equal(isValidCoinReward(0), true);
+    assert.equal(isValidCoinReward(0.5), true);
+    assert.equal(isValidCoinReward(2.5), true);
+    assert.equal(isValidCoinReward(MAX_TASK_COIN_REWARD), true);
+
+    // Invalid: negative, fractional (not a half-coin), over the cap, non-numbers.
+    assert.equal(isValidCoinReward(-0.5), false);
+    assert.equal(isValidCoinReward(1.25), false);
+    assert.equal(isValidCoinReward(MAX_TASK_COIN_REWARD + 0.5), false);
+    assert.equal(isValidCoinReward(NaN), false);
+    assert.equal(isValidCoinReward('2'), false);
+    assert.equal(isValidCoinReward(null), false);
+
+    // normalizeCoinReward accepts valid numbers and throws otherwise.
+    assert.equal(normalizeCoinReward(2), 2);
+    assert.equal(normalizeCoinReward(1.5), 1.5);
+    assert.throws(() => normalizeCoinReward(-1), /0.5 increments/);
+    assert.throws(() => normalizeCoinReward(1.25), /0.5 increments/);
+    assert.throws(() => normalizeCoinReward(100000), /0.5 increments/);
+    // Non-number values are rejected by the validator (callers convert with
+    // Number() first, as the task routes do).
+    assert.throws(() => normalizeCoinReward('1.5'), /0.5 increments/);
+
+    // Rupee conversion keeps the existing 100 coins = Rs.10 rate.
+    assert.equal(coinsToRupees(0.5), 0.05);
+    assert.equal(coinsToRupees(2), 0.2);
+
+    // Reward units stay exact integers (2 units per coin).
+    assert.equal(rewardUnitsFromCoins(0.5), 1);
+    assert.equal(rewardUnitsFromCoins(2.5), 5);
+
+    // A task without a stored reward (legacy task) falls back to the default,
+    // and an invalid stored value never credits coins by itself.
+    assert.equal(resolveTaskCoinReward({}), DEFAULT_TASK_COIN_REWARD);
+    assert.equal(resolveTaskCoinReward({ coinReward: 3 }), 3);
+    assert.equal(resolveTaskCoinReward({ coinReward: 1.25 }), DEFAULT_TASK_COIN_REWARD);
+});
+
+test('withdrawal payment meta uses the backend conversion rate', () => {
+    const { withdrawalPaymentMeta } = require('../utils/taskReward');
+
+    // Backend rate: 100 coins = Rs.10, i.e. 10 coins = Rs.1.
+    const meta = withdrawalPaymentMeta(10);
+    assert.equal(meta.rupeeAmount, 10);
+    assert.equal(meta.coinsRequested, 100);
+    assert.equal(meta.coinsPerRupee, 10);
+    assert.equal(meta.ratePerCoin, 0.1);
+
+    const half = withdrawalPaymentMeta(0.5);
+    assert.equal(half.coinsRequested, 5);
+    assert.equal(half.rupeeAmount, 0.5);
+});
+
 test('MongoDB task completion, cycle, and concurrency integration', { skip: !testMongoUri }, async () => {
     const uri = new URL(testMongoUri);
     assert.match(uri.pathname.toLowerCase(), /test/, 'Use a dedicated MongoDB database whose name includes "test"');

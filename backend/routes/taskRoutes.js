@@ -7,7 +7,15 @@ const TaskCompletion = require('../models/TaskCompletion');
 const User = require('../models/User');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { requireUser } = require('../middleware/requireUser');
-const { REWARD_UNITS_PER_TASK, coinsFromRewardUnits, rupeesFromRewardUnits } = require('../utils/taskReward');
+const {
+    DEFAULT_TASK_COIN_REWARD,
+    coinsToRupees,
+    resolveTaskCoinReward,
+    rewardUnitsFromCoins,
+    normalizeCoinReward
+} = require('../utils/taskReward');
+
+const MAX_TASK_POINTS = 1000000;
 
 const activeTaskFilter = {
     $and: [
@@ -51,6 +59,53 @@ async function optionalUserForMobileTaskList(req, res, next) {
         req.user = null;
     }
     return next();
+}
+
+// Build a validated, whitelisted task payload so only expected fields can be
+// written (no mass assignment) and reward values are always valid.
+function buildTaskPayload(body) {
+    const payload = {};
+    const errors = [];
+    const source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+
+    if (source.title !== undefined) {
+        if (typeof source.title !== 'string' || !source.title.trim()) errors.push('Task title is required');
+        else payload.title = source.title.trim();
+    }
+    if (source.description !== undefined) {
+        if (typeof source.description !== 'string') errors.push('Description must be text');
+        else payload.description = source.description.trim();
+    }
+    if (source.youtubeUrl !== undefined) {
+        if (typeof source.youtubeUrl !== 'string') errors.push('Video URL must be text');
+        else payload.youtubeUrl = source.youtubeUrl.trim();
+    }
+    if (source.points !== undefined) {
+        const points = Number(source.points);
+        if (!Number.isFinite(points) || points < 0 || points > MAX_TASK_POINTS) {
+            errors.push('Task points must be a number between 0 and 1000000');
+        } else {
+            payload.points = Math.round(points);
+        }
+    }
+    if (source.status !== undefined) {
+        if (!['Active', 'Paused'].includes(source.status)) errors.push("Status must be 'Active' or 'Paused'");
+        else payload.status = source.status;
+    }
+    if (source.taskNumber !== undefined && source.taskNumber !== null && source.taskNumber !== '') {
+        const num = Number(source.taskNumber);
+        if (!Number.isInteger(num) || num < 1 || num > 50) errors.push('Task number must be an integer from 1 to 50');
+        else payload.taskNumber = num;
+    }
+    if (source.coinReward !== undefined && source.coinReward !== null && source.coinReward !== '') {
+        try {
+            payload.coinReward = normalizeCoinReward(Number(source.coinReward));
+        } catch (_err) {
+            errors.push('Coin reward must be between 0 and 1000 coins in 0.5 increments');
+        }
+    }
+
+    return { payload, errors };
 }
 
 async function getCurrentCycleAfterReconciliation(userId) {
@@ -173,11 +228,19 @@ router.post('/:taskId/complete', (req, res, next) => {
                 return;
             }
 
+            // The reward comes from the task document in the database; the
+            // request body is already rejected above so users can never
+            // influence their own reward from the client.
+            const rewardCoins = resolveTaskCoinReward(task);
+            const rewardUnits = rewardUnitsFromCoins(rewardCoins);
+            const earnedRupees = coinsToRupees(rewardCoins);
+
             await TaskCompletion.create([{
                 userId: user._id,
                 taskId: task._id,
                 cycle,
-                rewardUnits: REWARD_UNITS_PER_TASK
+                rewardUnits,
+                rewardCoins
             }], { session });
 
             const taskIds = activeTasks.map(activeTask => activeTask._id);
@@ -189,10 +252,10 @@ router.post('/:taskId/complete', (req, res, next) => {
             const totalTasks = taskIds.length;
             const cycleCompleted = completedTasks === totalTasks;
 
-            // 2 reward units = 1 coin. Every completion grants 1 unit = exactly 0.5 coin.
-            user.taskRewardUnits = (user.taskRewardUnits || 0) + REWARD_UNITS_PER_TASK;
-            user.points = (user.points || 0) + coinsFromRewardUnits(REWARD_UNITS_PER_TASK);
-            const earnedRupees = rupeesFromRewardUnits(REWARD_UNITS_PER_TASK);
+            // 2 reward units = 1 coin. Each completion credits the task's
+            // configured coin reward.
+            user.taskRewardUnits = (user.taskRewardUnits || 0) + rewardUnits;
+            user.points = Number(((user.points || 0) + rewardCoins).toFixed(2));
             user.balance = Number(((user.balance || 0) + earnedRupees).toFixed(2));
             user.totalEarned = Number(((user.totalEarned || 0) + earnedRupees).toFixed(2));
             user.currentTaskCycle = cycleCompleted ? cycle + 1 : cycle;
@@ -201,7 +264,8 @@ router.post('/:taskId/complete', (req, res, next) => {
             outcome = {
                 kind: 'completed',
                 points: user.points,
-                rewardUnits: REWARD_UNITS_PER_TASK,
+                rewardUnits,
+                rewardCoins,
                 rewardRupees: earnedRupees,
                 balance: user.balance,
                 totalEarned: user.totalEarned,
@@ -236,7 +300,7 @@ router.post('/:taskId/complete', (req, res, next) => {
             message: 'Task completed and reward credited',
             points: outcome.points,
             rewardUnits: outcome.rewardUnits,
-            rewardCoins: coinsFromRewardUnits(outcome.rewardUnits),
+            rewardCoins: outcome.rewardCoins,
             rewardRupees: outcome.rewardRupees,
             balance: outcome.balance,
             totalEarned: outcome.totalEarned,
@@ -260,28 +324,27 @@ router.post('/:taskId/complete', (req, res, next) => {
     }
 });
 
-// POST /api/tasks - Create a new task (Preserved existing endpoint)
+// POST /api/tasks - Create a new task (Admin only; validated field whitelist)
 router.post('/', requireAdmin, async (req, res) => {
     try {
-        const newTask = new Task(req.body);
+        const { payload, errors } = buildTaskPayload(req.body || {});
+        if (errors.length > 0) return res.status(400).json({ error: errors.join(' ') });
+        if (payload.title === undefined) return res.status(400).json({ error: 'Task title is required' });
+
+        const newTask = new Task({ ...payload, status: payload.status || 'Active' });
         const savedTask = await newTask.save();
         res.status(201).json(savedTask);
     } catch (err) {
+        if (err.name === 'ValidationError') return res.status(400).json({ error: err.message });
         res.status(400).json({ error: err.message });
     }
 });
 
-// PUT /api/tasks/:id - Update task (Preserved existing endpoint)
+// PUT /api/tasks/:id - Update task (Admin only; validated field whitelist)
 router.put('/:id', requireAdmin, async (req, res) => {
     try {
-        const updates = {};
-        for (const field of ['title', 'description', 'youtubeUrl', 'points', 'status', 'taskNumber']) {
-            if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) {
-                updates[field] = req.body[field];
-            }
-        }
-        if (typeof updates.description === 'string') updates.description = updates.description.trim();
-        if (typeof updates.youtubeUrl === 'string') updates.youtubeUrl = updates.youtubeUrl.trim();
+        const { payload, errors } = buildTaskPayload(req.body || {});
+        if (errors.length > 0) return res.status(400).json({ error: errors.join(' ') });
 
         let query;
         if (mongoose.isValidObjectId(req.params.id)) {
@@ -298,14 +361,14 @@ router.put('/:id', requireAdmin, async (req, res) => {
 
         let updatedTask = await Task.findOneAndUpdate(
             query,
-            { $set: updates },
+            { $set: payload },
             { new: true, runValidators: true }
         );
 
         if (!updatedTask && query.taskNumber) {
             updatedTask = await Task.findOneAndUpdate(
                 query,
-                { $set: { ...updates, createdAt: new Date() } },
+                { $set: { ...payload, createdAt: new Date() } },
                 { new: true, upsert: true, runValidators: true }
             );
         }
