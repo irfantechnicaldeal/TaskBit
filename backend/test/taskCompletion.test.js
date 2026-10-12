@@ -59,43 +59,74 @@ test('task coin reward validation rejects negative, invalid, and out-of-range va
     // The legacy default is preserved.
     assert.equal(DEFAULT_TASK_COIN_REWARD, 0.5);
 
-    // Valid rewards are non-negative half-coin increments up to the cap.
+    // Valid rewards are non-negative 0.1-coin increments up to the cap.
     assert.equal(isValidCoinReward(0), true);
+    assert.equal(isValidCoinReward(0.1), true);
+    assert.equal(isValidCoinReward(0.2), true);
+    assert.equal(isValidCoinReward(0.7), true);
+    assert.equal(isValidCoinReward(1.2), true);
     assert.equal(isValidCoinReward(0.5), true);
-    assert.equal(isValidCoinReward(2.5), true);
     assert.equal(isValidCoinReward(MAX_TASK_COIN_REWARD), true);
 
-    // Invalid: negative, fractional (not a half-coin), over the cap, non-numbers.
-    assert.equal(isValidCoinReward(-0.5), false);
+    // Invalid: negative, not a 0.1 multiple, over the cap, non-numbers.
+    assert.equal(isValidCoinReward(-0.1), false);
+    assert.equal(isValidCoinReward(0.15), false);
     assert.equal(isValidCoinReward(1.25), false);
-    assert.equal(isValidCoinReward(MAX_TASK_COIN_REWARD + 0.5), false);
+    assert.equal(isValidCoinReward(MAX_TASK_COIN_REWARD + 0.1), false);
     assert.equal(isValidCoinReward(NaN), false);
-    assert.equal(isValidCoinReward('2'), false);
+    assert.equal(isValidCoinReward('0.2'), false);
     assert.equal(isValidCoinReward(null), false);
 
     // normalizeCoinReward accepts valid numbers and throws otherwise.
-    assert.equal(normalizeCoinReward(2), 2);
+    assert.equal(normalizeCoinReward(1.2), 1.2);
+    assert.equal(normalizeCoinReward(0.7), 0.7);
     assert.equal(normalizeCoinReward(1.5), 1.5);
-    assert.throws(() => normalizeCoinReward(-1), /0.5 increments/);
-    assert.throws(() => normalizeCoinReward(1.25), /0.5 increments/);
-    assert.throws(() => normalizeCoinReward(100000), /0.5 increments/);
+    assert.throws(() => normalizeCoinReward(-0.1), /0.1 increments/);
+    assert.throws(() => normalizeCoinReward(1.25), /0.1 increments/);
+    assert.throws(() => normalizeCoinReward(100000), /0.1 increments/);
     // Non-number values are rejected by the validator (callers convert with
     // Number() first, as the task routes do).
-    assert.throws(() => normalizeCoinReward('1.5'), /0.5 increments/);
+    assert.throws(() => normalizeCoinReward('1.2'), /0.1 increments/);
 
     // Rupee conversion keeps the existing 100 coins = Rs.10 rate.
     assert.equal(coinsToRupees(0.5), 0.05);
-    assert.equal(coinsToRupees(2), 0.2);
+    assert.equal(coinsToRupees(1.2), 0.12);
 
-    // Reward units stay exact integers (2 units per coin).
+    // Reward units keep the 1 unit = 0.5 coin ratio for every record.
     assert.equal(rewardUnitsFromCoins(0.5), 1);
     assert.equal(rewardUnitsFromCoins(2.5), 5);
+    assert.equal(rewardUnitsFromCoins(0.1), 0.2);
 
     // A task without a stored reward (legacy task) falls back to the default,
     // and an invalid stored value never credits coins by itself.
     assert.equal(resolveTaskCoinReward({}), DEFAULT_TASK_COIN_REWARD);
-    assert.equal(resolveTaskCoinReward({ coinReward: 3 }), 3);
+    assert.equal(resolveTaskCoinReward({ coinReward: 1.2 }), 1.2);
     assert.equal(resolveTaskCoinReward({ coinReward: 1.25 }), DEFAULT_TASK_COIN_REWARD);
+});
+
+test('withdrawal minimum ladder grows by 50 coins per approved withdrawal and caps at 500', () => {
+    const {
+        MIN_WITHDRAWAL_COINS,
+        MAX_WITHDRAWAL_MINIMUM_COINS,
+        coinsFromRupees,
+        coinsToRupees,
+        requiredWithdrawalMinimumCoins
+    } = require('../utils/taskReward');
+
+    assert.equal(MIN_WITHDRAWAL_COINS, 100);
+    assert.equal(MAX_WITHDRAWAL_MINIMUM_COINS, 500);
+    assert.equal(requiredWithdrawalMinimumCoins(0), 100);   // first withdrawal
+    assert.equal(requiredWithdrawalMinimumCoins(1), 150);   // second
+    assert.equal(requiredWithdrawalMinimumCoins(2), 200);   // third
+    assert.equal(requiredWithdrawalMinimumCoins(7), 450);
+    assert.equal(requiredWithdrawalMinimumCoins(8), 500);   // cap reached
+    assert.equal(requiredWithdrawalMinimumCoins(20), 500);  // stays capped
+    assert.equal(requiredWithdrawalMinimumCoins(-1), 100);
+
+    // Coin/rupee helpers used by the ladder (10 coins = Rs.1).
+    assert.equal(coinsFromRupees(10), 100);
+    assert.equal(coinsFromRupees(15), 150);
+    assert.equal(coinsToRupees(150), 15);
 });
 
 test('withdrawal payment meta uses the backend conversion rate', () => {

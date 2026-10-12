@@ -100,8 +100,8 @@ function buildTaskPayload(body) {
     if (source.coinReward !== undefined && source.coinReward !== null && source.coinReward !== '') {
         try {
             payload.coinReward = normalizeCoinReward(Number(source.coinReward));
-        } catch (_err) {
-            errors.push('Coin reward must be between 0 and 1000 coins in 0.5 increments');
+        } catch (err) {
+            errors.push(err.message);
         }
     }
 
