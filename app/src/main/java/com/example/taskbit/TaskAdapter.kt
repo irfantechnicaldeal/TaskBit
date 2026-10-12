@@ -15,7 +15,6 @@ class TaskAdapter(
 
     class TaskViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val titleTextView: TextView = view.findViewById(R.id.itemTaskTitleTextView)
-        val rewardTextView: TextView = view.findViewById(R.id.itemTaskRewardTextView)
         val startButton: MaterialButton = view.findViewById(R.id.itemStartButton)
     }
 
@@ -28,9 +27,6 @@ class TaskAdapter(
     override fun onBindViewHolder(holder: TaskViewHolder, position: Int) {
         val task = taskList[position]
         holder.titleTextView.text = task.title
-        // Reward shown comes from the task record on the server (admin-configured),
-        // not a hardcoded value.
-        holder.rewardTextView.text = "+${CoinFormatter.format(task.coinReward ?: 0.5)} coins"
         holder.startButton.text = if (task.completed) "Completed" else "Start"
         holder.startButton.isEnabled = !task.completed
         holder.startButton.setOnClickListener {
