@@ -108,6 +108,12 @@ test('withdrawal duplicate, concurrency, and double-deduction protection', { ski
         const insufficient = await userSend('/withdrawals', { token: poor.token, method: 'POST', body: withdrawalBody });
         assert.equal(insufficient.status, 400);
 
+        // Below the minimum ladder (₹5 = 50 coins < 100) is rejected with the
+        // required minimum before any balance check.
+        const belowMinimum = await userSend('/withdrawals', { token: poor.token, method: 'POST', body: { amount: 5, method: 'UPI' } });
+        assert.equal(belowMinimum.status, 400);
+        assert.equal((await belowMinimum.json()).minimumCoins, 100);
+
         // Concurrent duplicate submissions: exactly one succeeds, the rest are 409.
         const concurrent = await makeUser('concurrent', 100, 1000);
         const concurrentResults = await Promise.all(
@@ -137,7 +143,12 @@ test('withdrawal duplicate, concurrency, and double-deduction protection', { ski
         assert.equal(refreshed.totalWithdrawn, 10);
 
         // With no pending request left, a legitimate future withdrawal is allowed.
-        const future = await userSend('/withdrawals', { token: concurrent.token, method: 'POST', body: withdrawalBody });
+        // The ladder grew after the approval: ₹10 (100 coins) is now below the
+        // 150-coin minimum and must be rejected; ₹15 (150 coins) is accepted.
+        const belowLadder = await userSend('/withdrawals', { token: concurrent.token, method: 'POST', body: withdrawalBody });
+        assert.equal(belowLadder.status, 400);
+        assert.equal((await belowLadder.json()).minimumCoins, 150);
+        const future = await userSend('/withdrawals', { token: concurrent.token, method: 'POST', body: { amount: 15, method: 'UPI' } });
         assert.equal(future.status, 201, 'A new withdrawal must be possible once the previous one is resolved');
 
         // Rejection does not deduct and frees the user to request again.

@@ -8,10 +8,15 @@ const TaskCompletion = require('../models/TaskCompletion');
 const TaskSession = require('../models/TaskSession');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { requireUser } = require('../middleware/requireUser');
+const { requiredWithdrawalMinimumCoins, coinsToRupees } = require('../utils/taskReward');
 
 // GET /api/users/me - Return safe profile fields for the authenticated user.
-router.get('/me', requireUser, (req, res) => {
+router.get('/me', requireUser, async (req, res) => {
     const user = req.user;
+    // Withdrawal minimum for this user's NEXT request: 100 coins for the first,
+    // +50 per approved withdrawal, capped at 500. Rejected/pending never count.
+    const approvedWithdrawals = await Withdrawal.countDocuments({ userId: user._id, status: 'approved' });
+    const minimumCoins = requiredWithdrawalMinimumCoins(approvedWithdrawals);
     res.json({
         _id: user._id,
         name: user.name,
@@ -23,6 +28,8 @@ router.get('/me', requireUser, (req, res) => {
         balance: user.balance,
         totalEarned: user.totalEarned,
         totalWithdrawn: user.totalWithdrawn,
+        withdrawalMinimumCoins: minimumCoins,
+        withdrawalMinimumRupees: coinsToRupees(minimumCoins),
         createdAt: user.createdAt
     });
 });

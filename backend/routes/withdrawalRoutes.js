@@ -5,14 +5,31 @@ const Withdrawal = require('../models/Withdrawal');
 const User = require('../models/User');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const { requireUser } = require('../middleware/requireUser');
-const { withdrawalPaymentMeta } = require('../utils/taskReward');
+const { withdrawalPaymentMeta, requiredWithdrawalMinimumCoins, coinsToRupees, coinsFromRupees } = require('../utils/taskReward');
 
-// Admin-facing view of a withdrawal: adds the user's coin balance and the
-// payment summary (requested coins, rupees, conversion rate) computed from the
-// backend's real conversion rate so the frontend never hardcodes a rate.
-function adminWithdrawalView(withdrawal) {
+// Admin-facing view of a withdrawal: adds the user's coin balance, the payment
+// summary (requested coins, rupees, conversion rate), and the minimum coins now
+// required for this user's next withdrawal (approved-only ladder).
+function adminWithdrawalView(withdrawal, approvedByUser) {
     const doc = withdrawal.toJSON();
-    return { ...doc, ...withdrawalPaymentMeta(doc.amount) };
+    const userId = String(doc.userId?._id || doc.userId || '');
+    const approvedCount = approvedByUser ? (approvedByUser.get(userId) || 0) : null;
+    const minimumCoins = approvedCount === null ? null : requiredWithdrawalMinimumCoins(approvedCount);
+    return {
+        ...doc,
+        ...withdrawalPaymentMeta(doc.amount),
+        requiredMinimumCoins: minimumCoins,
+        requiredMinimumRupees: minimumCoins === null ? null : coinsToRupees(minimumCoins)
+    };
+}
+
+// Count of APPROVED withdrawals per user (rejected/pending never count).
+async function approvedWithdrawalCounts() {
+    const rows = await Withdrawal.aggregate([
+        { $match: { status: 'approved' } },
+        { $group: { _id: '$userId', count: { $sum: 1 } } }
+    ]);
+    return new Map(rows.map(row => [String(row._id), row.count]));
 }
 
 // POST /api/withdrawals - Request a withdrawal
@@ -31,6 +48,20 @@ router.post('/', requireUser, async (req, res) => {
         }
         if (typeof method !== 'string' || !method.trim()) {
             return res.status(400).json({ error: 'Withdrawal method is required' });
+        }
+
+        // Withdrawal minimum ladder (validated on the backend): the first
+        // withdrawal needs at least 100 coins, +50 coins per approved
+        // withdrawal (+50), capped at 500. Rejected/pending do not count.
+        const approvedCount = await Withdrawal.countDocuments({ userId: req.user._id, status: 'approved' });
+        const minimumCoins = requiredWithdrawalMinimumCoins(approvedCount);
+        const requestedCoins = coinsFromRupees(amount);
+        if (requestedCoins + 1e-9 < minimumCoins) {
+            return res.status(400).json({
+                error: `Minimum withdrawal is ${minimumCoins} coins (₹${coinsToRupees(minimumCoins).toFixed(2)}) for your next request.`,
+                minimumCoins,
+                minimumRupees: coinsToRupees(minimumCoins)
+            });
         }
 
         // Validate the user's available balance on the backend (100 coins = ₹10).
@@ -80,10 +111,11 @@ router.get('/', requireAdmin, async (req, res) => {
     try {
         const includeArchived = String(req.query.includeArchived || '').toLowerCase() === 'true';
         const filter = includeArchived ? {} : { archived: { $ne: true } };
+        const approvedByUser = await approvedWithdrawalCounts();
         const withdrawals = await Withdrawal.find(filter)
             .populate('userId', 'name email phone points balance')
             .sort({ createdAt: -1 });
-        res.json(withdrawals.map(adminWithdrawalView));
+        res.json(withdrawals.map(w => adminWithdrawalView(w, approvedByUser)));
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -107,7 +139,9 @@ router.get('/:id', requireAdmin, async (req, res) => {
     try {
         const withdrawal = await Withdrawal.findById(req.params.id).populate('userId', 'name email phone points balance');
         if (!withdrawal) return res.status(404).json({ error: 'Withdrawal request not found' });
-        res.json(adminWithdrawalView(withdrawal));
+        const userId = String(withdrawal.userId?._id || withdrawal.userId || '');
+        const approvedByUser = new Map([[userId, await Withdrawal.countDocuments({ userId, status: 'approved' })]]);
+        res.json(adminWithdrawalView(withdrawal, approvedByUser));
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
