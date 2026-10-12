@@ -69,6 +69,11 @@ router.post('/', requireUser, async (req, res) => {
             return res.status(400).json({ error: 'Insufficient balance for withdrawal' });
         }
 
+        // The user must hold the coins being withdrawn: coins are deducted on approval.
+        if (req.user.points + 1e-9 < requestedCoins) {
+            return res.status(400).json({ error: 'Not enough coins for this withdrawal' });
+        }
+
         // Ensure the unique partial index that guarantees a single pending request
         // per user exists before we rely on it to reject concurrent duplicates.
         try {
@@ -180,8 +185,11 @@ router.put('/:id/status', requireAdmin, async (req, res) => {
 
         // If approved, update user's totalWithdrawn and deduct balance exactly once.
         if (status === 'approved') {
+            // Deduct both ledgers: the rupee wallet and the matching coins
+            // (10 coins = ₹1, the same rate used when rewards are credited).
             await User.findByIdAndUpdate(updatedWithdrawal.userId, {
                 $inc: {
+                    points: -coinsFromRupees(updatedWithdrawal.amount),
                     balance: -updatedWithdrawal.amount,
                     totalWithdrawn: updatedWithdrawal.amount
                 }

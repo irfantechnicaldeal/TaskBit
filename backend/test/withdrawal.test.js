@@ -133,6 +133,7 @@ test('withdrawal duplicate, concurrency, and double-deduction protection', { ski
         assert.equal(approve.status, 200);
         let refreshed = await User.findById(concurrent.user._id);
         assert.equal(refreshed.balance, 90, 'Approval deducts the balance exactly once');
+        assert.equal(refreshed.points, 900, 'Approval deducts the coins exactly once (100 coins for Rs.10)');
         assert.equal(refreshed.totalWithdrawn, 10);
 
         // Re-approving the same request must NOT deduct again (idempotent).
@@ -140,7 +141,14 @@ test('withdrawal duplicate, concurrency, and double-deduction protection', { ski
         assert.equal(reApprove.status, 200);
         refreshed = await User.findById(concurrent.user._id);
         assert.equal(refreshed.balance, 90, 'Re-approval must not double-deduct the balance');
+        assert.equal(refreshed.points, 900, 'Re-approval must not double-deduct coins');
         assert.equal(refreshed.totalWithdrawn, 10);
+
+        // A user without enough coins cannot request even if the rupees are there.
+        const fewCoins = await makeUser('fewcoins', 100, 50);
+        const notEnoughCoins = await userSend('/withdrawals', { token: fewCoins.token, method: 'POST', body: withdrawalBody });
+        assert.equal(notEnoughCoins.status, 400);
+        assert.match((await notEnoughCoins.json()).error, /coins/i);
 
         // With no pending request left, a legitimate future withdrawal is allowed.
         // The ladder grew after the approval: ₹10 (100 coins) is now below the
