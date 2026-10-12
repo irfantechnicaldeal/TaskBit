@@ -31,7 +31,11 @@ class RedeemActivity : AppCompatActivity() {
     private lateinit var bankDetailsButton: MaterialButton
     private lateinit var historyRecyclerView: RecyclerView
     private lateinit var emptyHistoryTextView: TextView
-    private val confirmedWithdrawals = mutableListOf<RedeemHistoryAdapter.RedeemItem>()
+
+    // Withdrawal history comes from the backend (GET /withdrawals/mine), which
+    // returns this logged-in user's own requests with their real status.
+    private var historyItems: List<RedeemHistoryAdapter.RedeemItem> = emptyList()
+    private var historyState: HistoryState = HistoryState.Loading
     private var currentCoins = 0.0
     private var profileLoaded = false
 
@@ -46,8 +50,8 @@ class RedeemActivity : AppCompatActivity() {
     // request (100 coins for the first, +50 per approved withdrawal, max 500).
     private var withdrawalMinimumCoins = 0.0
     private var withdrawalMinimumRupees = 0.0
-    private var lastRequestCoins = 0.0
-    private var lastRequestRupees = 0.0
+
+    private enum class HistoryState { Loading, Loaded, Error }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,10 +86,14 @@ class RedeemActivity : AppCompatActivity() {
     private fun loadDashboardData() {
         profileLoaded = false
         availableCoinsTextView.text = "Loading coins…"
+        historyState = HistoryState.Loading
         renderHistory()
 
         if (UserSession.getLoggedInUserId(this).isNullOrBlank()) {
             availableCoinsTextView.text = "Sign in to view coins"
+            historyItems = emptyList()
+            historyState = HistoryState.Loaded
+            renderHistory()
             return
         }
 
@@ -98,7 +106,10 @@ class RedeemActivity : AppCompatActivity() {
                     // Next-withdrawal minimum comes from the backend ladder.
                     withdrawalMinimumCoins = profile.withdrawalMinimumCoins
                     withdrawalMinimumRupees = profile.withdrawalMinimumRupees
-                    availableCoinsTextView.text = "${CoinFormatter.format(currentCoins)} Coins"
+                    // Show both the coin balance and the rupee wallet: approvals
+                    // deduct rupees, so both must be visible after a payout.
+                    availableCoinsTextView.text = "${CoinFormatter.format(currentCoins)} Coins " +
+                        "(₹${CoinFormatter.format(profile.balance)} wallet)"
                     updateMinimumDisplay()
                     updateRedeemButtonState()
                 } else {
@@ -111,20 +122,35 @@ class RedeemActivity : AppCompatActivity() {
             }
         })
 
-        // Check for an existing pending withdrawal so the redeem button stays
-        // disabled while one is awaiting processing (prevents a second request).
+        // Load the user's withdrawal history from the backend. The same list
+        // also tells us whether a pending request exists (button lock).
+        loadWithdrawalHistory()
+    }
+
+    // Single source of truth for the history list: the backend. Failures show
+    // an error with retry instead of a misleading "no history" message.
+    private fun loadWithdrawalHistory() {
+        historyState = HistoryState.Loading
+        renderHistory()
         RetrofitClient.apiService.getMyWithdrawals().enqueue(object : Callback<List<MyWithdrawal>> {
             override fun onResponse(call: Call<List<MyWithdrawal>>, response: Response<List<MyWithdrawal>>) {
                 val history = response.body()
-                hasPendingWithdrawal = history?.any {
-                    it.status.equals("pending", ignoreCase = true) && it.archived != true
-                } == true
+                if (response.isSuccessful && history != null) {
+                    historyItems = history.map { RedeemHistoryMapper.toRedeemItem(it) }
+                    hasPendingWithdrawal = history.any {
+                        it.status.equals("pending", ignoreCase = true) && it.archived != true
+                    }
+                    historyState = HistoryState.Loaded
+                } else {
+                    historyState = HistoryState.Error
+                }
+                renderHistory()
                 updateRedeemButtonState()
             }
 
             override fun onFailure(call: Call<List<MyWithdrawal>>, t: Throwable) {
-                hasPendingWithdrawal = false
-                updateRedeemButtonState()
+                historyState = HistoryState.Error
+                renderHistory()
             }
         })
     }
@@ -206,10 +232,7 @@ class RedeemActivity : AppCompatActivity() {
         setRequesting(true, "Submitting request…")
         // Request exactly the user's current minimum (>= backend ladder), so one
         // tap stays sufficient while the minimum grows with approved payouts.
-        val requestCoins = effectiveMinimumCoins()
         val requestRupees = effectiveMinimumRupees()
-        lastRequestCoins = requestCoins
-        lastRequestRupees = requestRupees
         val request = WithdrawalRequest(
             userId = userId,
             amount = requestRupees,
@@ -223,15 +246,9 @@ class RedeemActivity : AppCompatActivity() {
                 if (response.code() == 201 && withdrawal != null && !withdrawal.id.isNullOrBlank()) {
                     hasPendingWithdrawal = true
                     updateRedeemButtonState()
-                    confirmedWithdrawals.add(
-                        0,
-                        RedeemHistoryAdapter.RedeemItem(
-                            amount = "${CoinFormatter.format(lastRequestCoins)} Coins (₹${CoinFormatter.format(lastRequestRupees)})",
-                            date = withdrawal.createdAt ?: "Just now",
-                            status = withdrawal.status.replaceFirstChar { it.uppercase() }
-                        )
-                    )
-                    renderHistory()
+                    // Refresh from the server so the new request appears in the
+                    // history with its real status and id (no local duplicates).
+                    loadWithdrawalHistory()
                     Toast.makeText(this@RedeemActivity, WITHDRAWAL_SUCCESS_MESSAGE, Toast.LENGTH_LONG).show()
                 } else {
                     if (response.code() == 409) {
@@ -302,13 +319,31 @@ class RedeemActivity : AppCompatActivity() {
     }
 
     private fun renderHistory() {
-        if (confirmedWithdrawals.isEmpty()) {
-            emptyHistoryTextView.visibility = View.VISIBLE
-            historyRecyclerView.visibility = View.GONE
-        } else {
-            emptyHistoryTextView.visibility = View.GONE
-            historyRecyclerView.visibility = View.VISIBLE
-            historyRecyclerView.adapter = RedeemHistoryAdapter(confirmedWithdrawals.toList())
+        when (historyState) {
+            HistoryState.Loading -> {
+                emptyHistoryTextView.visibility = View.VISIBLE
+                emptyHistoryTextView.text = "Loading redemption history…"
+                emptyHistoryTextView.setOnClickListener(null)
+                historyRecyclerView.visibility = View.GONE
+            }
+            HistoryState.Error -> {
+                emptyHistoryTextView.visibility = View.VISIBLE
+                emptyHistoryTextView.text = "Could not load redemption history. Tap to retry."
+                emptyHistoryTextView.setOnClickListener { loadWithdrawalHistory() }
+                historyRecyclerView.visibility = View.GONE
+            }
+            HistoryState.Loaded -> {
+                emptyHistoryTextView.setOnClickListener(null)
+                if (historyItems.isEmpty()) {
+                    emptyHistoryTextView.visibility = View.VISIBLE
+                    emptyHistoryTextView.text = "No redemption history yet."
+                    historyRecyclerView.visibility = View.GONE
+                } else {
+                    emptyHistoryTextView.visibility = View.GONE
+                    historyRecyclerView.visibility = View.VISIBLE
+                    historyRecyclerView.adapter = RedeemHistoryAdapter(historyItems)
+                }
+            }
         }
     }
 
