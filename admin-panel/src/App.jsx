@@ -293,8 +293,8 @@ export default function App() {
     const coinReward = Number(coinRewardInput);
     if (coinRewardInput === '' || coinRewardInput === null || coinRewardInput === undefined ||
         !Number.isFinite(coinReward) || coinReward < 0 || coinReward > 1000 ||
-        Math.abs(coinReward * 2 - Math.round(coinReward * 2)) > 1e-9) {
-      showToast('Coin reward must be between 0 and 1000 coins in 0.5 increments.', 'error');
+        Math.abs(coinReward * 10 - Math.round(coinReward * 10)) > 1e-9) {
+      showToast('Coin reward must be between 0 and 1000 coins in 0.1 increments.', 'error');
       return;
     }
     const taskPayload = {
@@ -1475,6 +1475,12 @@ export default function App() {
                     <span className="font-bold text-slate-800">{detailsWithdrawal.coinsPerRupee ? `${detailsWithdrawal.coinsPerRupee} coins = ₹1` : 'Not provided'}</span>
                   </div>
                 </div>
+                {detailsWithdrawal.requiredMinimumCoins != null && (
+                  <p className="mt-3 text-xs font-bold text-blue-700">
+                    Minimum for this user's next withdrawal: {detailsWithdrawal.requiredMinimumCoins} coins (₹{(detailsWithdrawal.requiredMinimumRupees ?? 0).toFixed(2)})
+                    <span className="ml-1 font-normal text-slate-400">(100 coins + 50 per approved withdrawal, max 500)</span>
+                  </p>
+                )}
                 <p className="mt-3 text-[11px] text-slate-400">Conversion rate and coin amounts are provided by the backend's actual payout settings; the amount payable is the value recorded when the request was created.</p>
               </div>
 
@@ -1608,7 +1614,7 @@ export default function App() {
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Coin Reward per Completion</label>
                   <input
                     type="number"
-                    step="0.5"
+                    step="0.1"
                     min="0"
                     max="1000"
                     value={Number.isFinite(currentTask.coinReward) ? currentTask.coinReward : 0.5}
@@ -1616,7 +1622,7 @@ export default function App() {
                     required
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none text-sm bg-slate-50/50 font-medium"
                   />
-                  <p className="mt-1 text-[11px] text-slate-500">Coins credited to the user's balance when they complete this task (0.5 increments, max 1000).</p>
+                  <p className="mt-1 text-[11px] text-slate-500">Coins credited to the user's balance when they complete this task (0.1 increments, max 1000).</p>
                 </div>
               </div>
 
