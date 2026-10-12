@@ -60,6 +60,15 @@
                 android:textStyle="bold"
                 android:textColor="@color/design_default_color_primary" />
 
+            <TextView
+                android:id="@+id/minimumInfoTextView"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Minimum withdrawal: 100 coins (Rs.10)"
+                android:textSize="12sp"
+                android:textColor="@android:color/darker_gray" />
+
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

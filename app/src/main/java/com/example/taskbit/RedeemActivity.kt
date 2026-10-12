@@ -26,6 +26,7 @@ import retrofit2.Response
 class RedeemActivity : AppCompatActivity() {
 
     private lateinit var availableCoinsTextView: TextView
+    private lateinit var minimumInfoTextView: TextView
     private lateinit var requestRedeemButton: MaterialButton
     private lateinit var bankDetailsButton: MaterialButton
     private lateinit var historyRecyclerView: RecyclerView
@@ -41,6 +42,13 @@ class RedeemActivity : AppCompatActivity() {
     private var hasPendingWithdrawal = false
     private var inFlightLabel = "Submitting…"
 
+    // Withdrawal minimum ladder, provided by the backend for this user's NEXT
+    // request (100 coins for the first, +50 per approved withdrawal, max 500).
+    private var withdrawalMinimumCoins = 0.0
+    private var withdrawalMinimumRupees = 0.0
+    private var lastRequestCoins = 0.0
+    private var lastRequestRupees = 0.0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -53,6 +61,7 @@ class RedeemActivity : AppCompatActivity() {
         }
 
         availableCoinsTextView = findViewById(R.id.availableCoinsTextView)
+        minimumInfoTextView = findViewById(R.id.minimumInfoTextView)
         requestRedeemButton = findViewById(R.id.requestRedeemButton)
         bankDetailsButton = findViewById(R.id.bankDetailsButton)
         historyRecyclerView = findViewById(R.id.historyRecyclerView)
@@ -86,7 +95,12 @@ class RedeemActivity : AppCompatActivity() {
                 if (response.isSuccessful && profile != null) {
                     currentCoins = profile.points
                     profileLoaded = true
+                    // Next-withdrawal minimum comes from the backend ladder.
+                    withdrawalMinimumCoins = profile.withdrawalMinimumCoins
+                    withdrawalMinimumRupees = profile.withdrawalMinimumRupees
                     availableCoinsTextView.text = "${CoinFormatter.format(currentCoins)} Coins"
+                    updateMinimumDisplay()
+                    updateRedeemButtonState()
                 } else {
                     availableCoinsTextView.text = "Coins unavailable"
                 }
@@ -133,8 +147,12 @@ class RedeemActivity : AppCompatActivity() {
             Toast.makeText(this, "Please wait while your coin balance loads", Toast.LENGTH_LONG).show()
             return
         }
-        if (currentCoins < COINS_PER_WITHDRAWAL) {
-            Toast.makeText(this, "Minimum 100 coins required to redeem!", Toast.LENGTH_LONG).show()
+        if (currentCoins + 1e-9 < effectiveMinimumCoins()) {
+            Toast.makeText(
+                this,
+                "Minimum ${CoinFormatter.format(effectiveMinimumCoins())} coins (₹${CoinFormatter.format(effectiveMinimumRupees())}) required to redeem!",
+                Toast.LENGTH_LONG
+            ).show()
             return
         }
 
@@ -186,9 +204,15 @@ class RedeemActivity : AppCompatActivity() {
 
     private fun submitWithdrawal(userId: String, method: String) {
         setRequesting(true, "Submitting request…")
+        // Request exactly the user's current minimum (>= backend ladder), so one
+        // tap stays sufficient while the minimum grows with approved payouts.
+        val requestCoins = effectiveMinimumCoins()
+        val requestRupees = effectiveMinimumRupees()
+        lastRequestCoins = requestCoins
+        lastRequestRupees = requestRupees
         val request = WithdrawalRequest(
             userId = userId,
-            amount = WITHDRAWAL_AMOUNT_RUPEES,
+            amount = requestRupees,
             method = method
         )
 
@@ -202,7 +226,7 @@ class RedeemActivity : AppCompatActivity() {
                     confirmedWithdrawals.add(
                         0,
                         RedeemHistoryAdapter.RedeemItem(
-                            amount = "$COINS_PER_WITHDRAWAL Coins (₹$WITHDRAWAL_AMOUNT_RUPEES)",
+                            amount = "${CoinFormatter.format(lastRequestCoins)} Coins (₹${CoinFormatter.format(lastRequestRupees)})",
                             date = withdrawal.createdAt ?: "Just now",
                             status = withdrawal.status.replaceFirstChar { it.uppercase() }
                         )
@@ -241,7 +265,8 @@ class RedeemActivity : AppCompatActivity() {
     }
 
     // Single source of truth for the redeem button state: disabled while a
-    // request is in flight or while a pending withdrawal is awaiting processing.
+    // request is in flight, while a pending withdrawal is awaiting processing,
+    // or while the balance is below the user's current minimum.
     private fun updateRedeemButtonState() {
         when {
             requestInFlight -> {
@@ -252,11 +277,28 @@ class RedeemActivity : AppCompatActivity() {
                 requestRedeemButton.isEnabled = false
                 requestRedeemButton.text = "Withdrawal Pending…"
             }
+            profileLoaded && currentCoins + 1e-9 < effectiveMinimumCoins() -> {
+                requestRedeemButton.isEnabled = false
+                requestRedeemButton.text = "Need ${CoinFormatter.format(effectiveMinimumCoins())} Coins"
+            }
             else -> {
                 requestRedeemButton.isEnabled = true
                 requestRedeemButton.text = "Redeem Now"
             }
         }
+    }
+
+    // Backend-provided minimum for this user's next withdrawal; falls back to
+    // the base 100-coin minimum when not available (e.g. older backend).
+    private fun effectiveMinimumCoins(): Double =
+        if (withdrawalMinimumCoins > 0) withdrawalMinimumCoins else DEFAULT_MINIMUM_COINS
+
+    private fun effectiveMinimumRupees(): Double =
+        if (withdrawalMinimumRupees > 0) withdrawalMinimumRupees else effectiveMinimumCoins() * RUPEES_PER_COIN
+
+    private fun updateMinimumDisplay() {
+        minimumInfoTextView.text = "Minimum withdrawal: ${CoinFormatter.format(effectiveMinimumCoins())} coins " +
+            "(₹${CoinFormatter.format(effectiveMinimumRupees())})"
     }
 
     private fun renderHistory() {
@@ -271,10 +313,11 @@ class RedeemActivity : AppCompatActivity() {
     }
 
     private companion object {
-        const val COINS_PER_WITHDRAWAL = 100
-        const val WITHDRAWAL_AMOUNT_RUPEES = 10
-        const val METHOD_UPI = "UPI"
-        const val METHOD_BANK_TRANSFER = "Bank Transfer"
+        val RUPEES_PER_COIN = 0.1
+        val DEFAULT_MINIMUM_COINS = 100.0
+        val DEFAULT_MINIMUM_RUPEES = 10.0
+        val METHOD_UPI = "UPI"
+        val METHOD_BANK_TRANSFER = "Bank Transfer"
         const val WITHDRAWAL_SUCCESS_MESSAGE =
             "Withdrawal request submitted successfully! Your payment is expected within 24 hours. " +
                 "Please wait while we process your request. You can check your withdrawal status in Withdrawal History."

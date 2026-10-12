@@ -4,7 +4,7 @@ import com.google.gson.annotations.SerializedName
 
 data class WithdrawalRequest(
     val userId: String,
-    val amount: Int,
+    val amount: Double,
     val method: String
 )
 

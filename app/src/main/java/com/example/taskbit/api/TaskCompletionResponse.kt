@@ -4,7 +4,7 @@ data class TaskCompletionResponse(
     val success: Boolean = true,
     val message: String? = null,
     val points: Double = 0.0,
-    val rewardUnits: Int = 1,
+    val rewardUnits: Double = 1.0,
     val rewardCoins: Double = 0.5,
     val completedCycle: Int = 1,
     val currentCycle: Int = 1,
