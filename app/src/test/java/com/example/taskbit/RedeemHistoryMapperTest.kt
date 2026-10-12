@@ -2,6 +2,7 @@ package com.example.taskbit
 
 import com.example.taskbit.api.MyWithdrawal
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -48,5 +49,13 @@ class RedeemHistoryMapperTest {
             MyWithdrawal(id = "w", amount = 10.0, method = "UPI", status = "pending", createdAt = null, archived = false)
         )
         assertEquals("Just now", item.date)
+    }
+
+    @Test
+    fun coinsDisplayShowsOnlyCoinsCount() {
+        val summary = RedeemActivity.formatCoinsDisplay(101.9)
+        assertTrue(summary.contains("101.9 Coins"))
+        assertFalse(summary.contains("wallet"))
+        assertEquals("100 Coins", RedeemActivity.formatCoinsDisplay(100.0))
     }
 }

@@ -106,10 +106,9 @@ class RedeemActivity : AppCompatActivity() {
                     // Next-withdrawal minimum comes from the backend ladder.
                     withdrawalMinimumCoins = profile.withdrawalMinimumCoins
                     withdrawalMinimumRupees = profile.withdrawalMinimumRupees
-                    // Show both the coin balance and the rupee wallet: approvals
-                    // deduct rupees, so both must be visible after a payout.
-                    availableCoinsTextView.text = "${CoinFormatter.format(currentCoins)} Coins " +
-                        "(₹${CoinFormatter.format(profile.balance)} wallet)"
+                    // Labels reflect the actual data model: points is the user's
+                    // coin balance (withdrawals deduct coins on approval).
+                    availableCoinsTextView.text = formatCoinsDisplay(currentCoins)
                     updateMinimumDisplay()
                     updateRedeemButtonState()
                 } else {
@@ -347,12 +346,21 @@ class RedeemActivity : AppCompatActivity() {
         }
     }
 
-    private companion object {
+    companion object {
         val RUPEES_PER_COIN = 0.1
         val DEFAULT_MINIMUM_COINS = 100.0
         val DEFAULT_MINIMUM_RUPEES = 10.0
         val METHOD_UPI = "UPI"
         val METHOD_BANK_TRANSFER = "Bank Transfer"
+
+        /**
+         * Balance shown on the Redeem screen: the user's coin balance, taken
+         * straight from the API `points` field (no conversion, no extra text).
+         * Withdrawals deduct these coins on approval.
+         */
+        @JvmStatic
+        fun formatCoinsDisplay(coins: Double): String = "${CoinFormatter.format(coins)} Coins"
+
         const val WITHDRAWAL_SUCCESS_MESSAGE =
             "Withdrawal request submitted successfully! Your payment is expected within 24 hours. " +
                 "Please wait while we process your request. You can check your withdrawal status in Withdrawal History."
